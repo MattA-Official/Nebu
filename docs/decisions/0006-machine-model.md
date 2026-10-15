@@ -1,6 +1,6 @@
 # 0006. Machine model
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-15
 
 ## Context
