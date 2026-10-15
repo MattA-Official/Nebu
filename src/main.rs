@@ -5,18 +5,107 @@
 
 #![forbid(unsafe_code)]
 
+mod bus;
+mod cpu;
+mod decode;
+mod pl011;
+
 use std::process::ExitCode;
+use std::{env, fs, thread};
+
+use bus::Bus;
+use cpu::{Cpu, Step};
+use pl011::Pl011;
+
+/// Where the firmware loads `kernel8.img` and starts running it.
+const LOAD_ADDRESS: u64 = 0x80000;
+
+/// Exit code when Nebu meets something it cannot emulate.
+const FAULT_EXIT_CODE: u8 = 70;
+
+const USAGE: &str = "\
+usage: nebu [--semihosting] [--trace] <kernel8.img>
+
+  --semihosting  let `hlt #0xf000` make semihosting calls, as QEMU's -semihosting does
+  --trace        print every instruction to standard error before running it";
 
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    match args.next() {
-        Some(kernel) => {
-            eprintln!("nebu: cannot run {kernel} yet; the CPU core arrives with NeOS step 2");
-            ExitCode::FAILURE
-        }
-        None => {
-            eprintln!("usage: nebu <kernel8.img>");
-            ExitCode::from(2)
+    let mut semihosting = false;
+    let mut trace = false;
+    let mut image = None;
+    for argument in env::args().skip(1) {
+        match argument.as_str() {
+            "--semihosting" => semihosting = true,
+            "--trace" => trace = true,
+            _ if argument.starts_with('-') || image.is_some() => {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            }
+            _ => image = Some(argument),
         }
     }
+    let Some(image) = image else {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    };
+
+    let bytes = match fs::read(&image) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("nebu: cannot read {image}: {error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let mut bus = Bus::new(Pl011::new(Box::new(std::io::stdout())));
+    if let Err(error) = bus.load(LOAD_ADDRESS, &bytes) {
+        eprintln!("nebu: cannot load {image}: {error}");
+        return ExitCode::from(2);
+    }
+    let mut cpu = Cpu::new(LOAD_ADDRESS, semihosting);
+
+    loop {
+        match cpu.step(&mut bus, trace) {
+            Ok(Step::Continue) => {}
+            Ok(Step::Exit(code)) => return ExitCode::from(code as u8),
+            Ok(Step::Asleep) => {
+                // Nothing in Nebu can send an event yet, so the core sleeps forever,
+                // as it would in QEMU.
+                eprintln!("nebu: core 0 is waiting for an event that nothing can send");
+                eprintln!("nebu: press Ctrl-C to quit");
+                loop {
+                    thread::park();
+                }
+            }
+            Err(fault) => {
+                eprintln!("nebu: stopped at pc {:#010x}: {fault}", cpu.pc);
+                dump_registers(&cpu);
+                return ExitCode::from(FAULT_EXIT_CODE);
+            }
+        }
+    }
+}
+
+/// Prints the CPU state, to help work out what the software was doing.
+fn dump_registers(cpu: &Cpu) {
+    for (pair, values) in cpu.x.chunks(2).enumerate() {
+        let line: Vec<String> = values
+            .iter()
+            .enumerate()
+            .map(|(offset, value)| format!("x{:<2} {value:#018x}", pair * 2 + offset))
+            .collect();
+        eprintln!("  {}", line.join("   "));
+    }
+    let f = cpu.flags;
+    let flag = |set: bool, name: char| if set { name } else { '-' };
+    eprintln!(
+        "  sp  {:#018x}   pc  {:#018x}   EL{}  {}{}{}{}",
+        cpu.sp,
+        cpu.pc,
+        cpu.el,
+        flag(f.n, 'N'),
+        flag(f.z, 'Z'),
+        flag(f.c, 'C'),
+        flag(f.v, 'V')
+    );
 }
