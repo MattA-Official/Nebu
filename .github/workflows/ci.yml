@@ -1,0 +1,30 @@
+# Checks every push to main and every pull request.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --all-targets -- --deny warnings
+
+      - name: Check there are no external crates
+        run: |
+          packages=$(grep --count '^\[\[package\]\]' Cargo.lock)
+          if [ "$packages" -ne 1 ]; then
+            echo "Cargo.lock lists $packages packages; only nebu is allowed (ADR 0002)"
+            exit 1
+          fi
+
+      - name: Unit tests
+        run: cargo test

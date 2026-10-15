@@ -19,3 +19,4 @@ works live here.
 | 0003 | [Toolchain](0003-toolchain.md)                                   | Accepted |
 | 0004 | [Execution model: an interpreter](0004-execution-model.md)      | Accepted |
 | 0005 | [Licence](0005-licence.md)                                       | Accepted |
+| 0006 | [Machine model](0006-machine-model.md)                           | Accepted |

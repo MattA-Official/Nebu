@@ -20,19 +20,46 @@ it. QEMU's `raspi3b` machine is the reference that both projects are checked aga
 
 ## Status
 
-A skeleton for now. The CPU core arrives alongside NeOS step 2, which boots a kernel
-to a "hello" message over the serial port. What Nebu supports is tracked in
+Nebu runs NeOS step 2: it boots the kernel, prints its banner over the PL011 UART and
+reproduces QEMU's output byte for byte, including the panic path. It currently
+implements 30 A64 instructions, two system registers and one device; see
 [`docs/implemented.md`](docs/implemented.md).
 
-## Building
+## Building and running
 
 Requires [`rustup`](https://rustup.rs). The pinned compiler installs automatically
 from `rust-toolchain.toml`.
 
 ```sh
-cargo build
-cargo run -- path/to/kernel8.img
+cargo build --release
+./target/release/nebu path/to/kernel8.img
 ```
+
+| Option           | Effect |
+|------------------|--------|
+| `--semihosting`  | Lets `hlt #0xf000` make semihosting calls, as QEMU's `-semihosting` does. NeOS test builds use this to exit. |
+| `--trace`        | Prints every instruction to standard error before running it. |
+
+Usually you won't run Nebu directly: NeOS's `cargo xtask run --nebu` and
+`cargo xtask test` build and run it for you from a checkout next to NeOS.
+
+When Nebu meets something it does not implement, it stops and says exactly what:
+
+```text
+nebu: stopped at pc 0x000801bc: cannot run instruction 0xd65f03c0: instruction not implemented
+  x0  0x00000000000902b8   x1  0x00000000000802d0
+  ...
+```
+
+## Layout
+
+| Path             | What it is                                              |
+|------------------|---------------------------------------------------------|
+| `src/decode.rs`  | Turns instruction words into `Instruction` values, and prints them. |
+| `src/cpu.rs`     | Registers, flags and the execution of each instruction. |
+| `src/bus.rs`     | The address space: sparse RAM and the device map.       |
+| `src/pl011.rs`   | The PL011 UART.                                         |
+| `src/main.rs`    | Command-line handling and the run loop.                 |
 
 ## Licence
 
