@@ -1,0 +1,5 @@
+# Pinned compiler version, kept in step with NeOS. See docs/decisions/0003-toolchain.md.
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
