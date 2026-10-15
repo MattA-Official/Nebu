@@ -1,0 +1,15 @@
+[package]
+name = "nebu"
+version = "0.1.0"
+edition = "2024"
+description = "Nebuchadnezzar: a minimal Raspberry Pi 3B emulator developed in lockstep with NeOS"
+publish = false
+
+# No dependencies, ever. See docs/decisions/0002-no-dependencies-no-unsafe.md.
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
