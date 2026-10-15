@@ -201,21 +201,41 @@ impl Cpu {
                 let value = self.read(rn, width) & imm;
                 self.write_sp(rd, width, value);
             }
+            Movn { width, rd, imm16, shift } => {
+                self.write(rd, width, !(u64::from(imm16) << shift));
+            }
             Movz { width, rd, imm16, shift } => self.write(rd, width, u64::from(imm16) << shift),
             Movk { width, rd, imm16, shift } => {
                 let kept = self.read(rd, width) & !(0xFFFF << shift);
                 self.write(rd, width, kept | u64::from(imm16) << shift);
             }
             Bfm { width, rd, rn, immr, imms } => {
-                let n = u32::from(width == Width::W64);
-                let (wmask, tmask) =
-                    decode_bit_masks(n, u32::from(imms), u32::from(immr), false, width)
-                        .expect("the decoder only accepts valid bitfield encodings");
+                let (wmask, tmask) = bitfield_masks(immr, imms, width);
                 let dst = self.read(rd, width);
                 let src = self.read(rn, width);
                 let rotated = rotate_right(src, u32::from(immr), width);
                 let bottom = (dst & !wmask) | (rotated & wmask);
                 self.write(rd, width, (dst & !tmask) | (bottom & tmask));
+            }
+            Sbfm { width, rd, rn, immr, imms } => {
+                let (wmask, tmask) = bitfield_masks(immr, imms, width);
+                let src = self.read(rn, width);
+                let bottom = rotate_right(src, u32::from(immr), width) & wmask;
+                // Every bit above the field is a copy of the field's top bit, src<imms>.
+                let top = if src >> imms & 1 == 1 { width.mask() } else { 0 };
+                self.write(rd, width, (top & !tmask) | (bottom & tmask));
+            }
+            Ubfm { width, rd, rn, immr, imms } => {
+                let (wmask, tmask) = bitfield_masks(immr, imms, width);
+                let src = self.read(rn, width);
+                let bottom = rotate_right(src, u32::from(immr), width) & wmask;
+                self.write(rd, width, bottom & tmask);
+            }
+            AddsImmediate { width, rd, rn, imm } => {
+                let operand1 = self.read_sp(rn, width);
+                let (value, flags) = add_with_carry(operand1, imm, false, width);
+                self.write(rd, width, value);
+                self.flags = flags;
             }
             SubsImmediate { width, rd, rn, imm } => {
                 let operand1 = self.read_sp(rn, width);
@@ -223,9 +243,17 @@ impl Cpu {
                 self.write(rd, width, value);
                 self.flags = flags;
             }
+            AndShiftedRegister { width, rd, rn, rm, shift, amount } => {
+                let operand2 = shift_register(self.read(rm, width), shift, amount, width);
+                self.write(rd, width, self.read(rn, width) & operand2);
+            }
             OrrShiftedRegister { width, rd, rn, rm, shift, amount } => {
                 let operand2 = shift_register(self.read(rm, width), shift, amount, width);
                 self.write(rd, width, self.read(rn, width) | operand2);
+            }
+            EorShiftedRegister { width, rd, rn, rm, shift, amount } => {
+                let operand2 = shift_register(self.read(rm, width), shift, amount, width);
+                self.write(rd, width, self.read(rn, width) ^ operand2);
             }
             AddShiftedRegister { width, rd, rn, rm, shift, amount } => {
                 let operand2 = shift_register(self.read(rm, width), shift, amount, width);
@@ -244,7 +272,7 @@ impl Cpu {
                 self.write(30, Width::W64, pc.wrapping_add(4));
                 next = branch(offset);
             }
-            Ret { rn } => next = self.read(rn, Width::W64),
+            Br { rn } | Ret { rn } => next = self.read(rn, Width::W64),
             BCond { condition, offset } => {
                 if self.condition_holds(condition) {
                     next = branch(offset);
@@ -271,8 +299,9 @@ impl Cpu {
                 }
                 result = self.semihosting_call(bus)?;
             }
-            // No pipeline is modelled, so a barrier has nothing to wait for.
-            Nop | Isb => {}
+            // No pipeline or caches are modelled, so a barrier has nothing to wait for
+            // and there is no instruction cache to invalidate.
+            Nop | Isb | Dsb { .. } | IcIallu => {}
             Wfe => {
                 if self.event {
                     self.event = false;
@@ -286,6 +315,10 @@ impl Cpu {
                     SystemRegister::CurrentEl => u64::from(self.el) << 2,
                 };
                 self.write(rt, Width::W64, value);
+            }
+            LdrLiteral { width, rt, offset } => {
+                let value = load(bus, branch(offset), width.bytes())?;
+                self.write(rt, width, value);
             }
             LdrImmediate { width, rt, rn, index, offset } => {
                 let (address, writeback) = self.address(rn, index, offset)?;
@@ -320,6 +353,13 @@ impl Cpu {
                 let value = load(bus, address, 1)?;
                 self.write(rt, Width::W32, value);
             }
+            StrbImmediate { rt, rn, index, offset } => {
+                let (address, writeback) = self.address(rn, index, offset)?;
+                store(bus, address, 1, self.read(rt, Width::W32))?;
+                if let Some(base) = writeback {
+                    self.write_sp(rn, Width::W64, base);
+                }
+            }
             StrhImmediate { rt, rn, index, offset } => {
                 let (address, writeback) = self.address(rn, index, offset)?;
                 store(bus, address, 2, self.read(rt, Width::W32))?;
@@ -343,6 +383,16 @@ impl Cpu {
                 if let Some(base) = writeback {
                     self.write_sp(rn, Width::W64, base);
                 }
+            }
+            Ldp { width, rt, rt2, rn, index, offset } => {
+                let (address, writeback) = self.address(rn, index, offset)?;
+                let first = load(bus, address, width.bytes())?;
+                let second = load(bus, address.wrapping_add(width.bytes()), width.bytes())?;
+                if let Some(base) = writeback {
+                    self.write_sp(rn, Width::W64, base);
+                }
+                self.write(rt, width, first);
+                self.write(rt2, width, second);
             }
         }
 
@@ -385,6 +435,13 @@ fn load(bus: &mut Bus, address: u64, size: u64) -> Result<u64, Fault> {
 
 fn store(bus: &mut Bus, address: u64, size: u64, value: u64) -> Result<(), Fault> {
     bus.write(address, size, value).map_err(|error| Fault::Memory { address, write: true, error })
+}
+
+/// The `(wmask, tmask)` pair for a bitfield instruction's `immr` and `imms`.
+fn bitfield_masks(immr: u8, imms: u8, width: Width) -> (u64, u64) {
+    let n = u32::from(width == Width::W64);
+    decode_bit_masks(n, u32::from(imms), u32::from(immr), false, width)
+        .expect("the decoder only accepts valid bitfield encodings")
 }
 
 /// Rotates the low `width` bits of `value` right by `amount`.
@@ -432,6 +489,11 @@ mod tests {
     use super::*;
     use crate::pl011::Pl011;
 
+    /// A UART that discards its output and never receives anything.
+    fn uart() -> Pl011 {
+        Pl011::new(Box::new(std::io::sink()), std::sync::mpsc::channel().1)
+    }
+
     #[test]
     fn add_with_carry_sets_the_flags() {
         let flags = |n, z, c, v| Flags { n, z, c, v };
@@ -462,7 +524,7 @@ mod tests {
 
     /// Runs `program` from address 0x80000 until it stops.
     fn run(program: &[u32], steps: usize) -> (Cpu, Bus) {
-        let mut bus = Bus::new(Pl011::new(Box::new(std::io::sink())));
+        let mut bus = Bus::new(uart());
         let bytes: Vec<u8> = program.iter().flat_map(|word| word.to_le_bytes()).collect();
         bus.load(0x80000, &bytes).unwrap();
         let mut cpu = Cpu::new(0x80000, true);
@@ -489,9 +551,45 @@ mod tests {
     }
 
     #[test]
+    fn bitfield_moves_sign_and_zero_extend() {
+        // movn w27, #0; movz w1, #0x81; sxtb w2, w1; lsl w3, w1, #4
+        let (cpu, _) = run(&[0x1280001b, 0x52801021, 0x13001c22, 0x531c6c23], 4);
+        assert_eq!(cpu.x[27], 0xFFFF_FFFF);
+        assert_eq!(cpu.x[2], 0xFFFF_FF81);
+        assert_eq!(cpu.x[3], 0x810);
+    }
+
+    #[test]
+    fn literal_loads_and_register_branches() {
+        // ldr x1, #8; br x1; then the literal 0x80010
+        let (cpu, _) = run(&[0x58000041, 0xd61f0020, 0x0008_0010, 0], 2);
+        assert_eq!(cpu.x[1], 0x80010);
+        assert_eq!(cpu.pc, 0x80010);
+    }
+
+    #[test]
+    fn byte_stores_and_pair_loads() {
+        // movz x1, #0x1000; movz w2, #0x1ab; strb w2, [x1]; ldp x3, x4, [x1]
+        let (cpu, _) = run(&[0xd2820001, 0x52803562, 0x39000022, 0xa9401023], 4);
+        assert_eq!(cpu.x[3], 0xab);
+        assert_eq!(cpu.x[4], 0);
+    }
+
+    #[test]
+    fn cmn_sets_the_flags_of_an_addition() {
+        // cmn w5, #1 with w5 = -1: the sum wraps to zero with a carry out.
+        let mut bus = Bus::new(uart());
+        bus.load(0x80000, &0x310004bfu32.to_le_bytes()).unwrap();
+        let mut cpu = Cpu::new(0x80000, false);
+        cpu.x[5] = 0xFFFF_FFFF;
+        cpu.step(&mut bus, false).unwrap();
+        assert_eq!(cpu.flags, Flags { n: false, z: true, c: true, v: false });
+    }
+
+    #[test]
     fn semihosting_exit_reports_the_code() {
         // Block at 0x1000: [ADP_Stopped_ApplicationExit, 7]
-        let mut bus = Bus::new(Pl011::new(Box::new(std::io::sink())));
+        let mut bus = Bus::new(uart());
         bus.write(0x1000, 8, ADP_STOPPED_APPLICATION_EXIT).unwrap();
         bus.write(0x1008, 8, 7).unwrap();
         bus.load(0x80000, &0xd45e0000u32.to_le_bytes()).unwrap();

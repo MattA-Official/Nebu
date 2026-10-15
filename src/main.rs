@@ -8,9 +8,12 @@
 mod bus;
 mod cpu;
 mod decode;
+mod gpio;
 mod pl011;
 
+use std::io::Read;
 use std::process::ExitCode;
+use std::sync::mpsc::{self, Receiver};
 use std::{env, fs, thread};
 
 use bus::Bus;
@@ -57,7 +60,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut bus = Bus::new(Pl011::new(Box::new(std::io::stdout())));
+    let mut bus = Bus::new(Pl011::new(Box::new(std::io::stdout()), read_stdin()));
     if let Err(error) = bus.load(LOAD_ADDRESS, &bytes) {
         eprintln!("nebu: cannot load {image}: {error}");
         return ExitCode::from(2);
@@ -84,6 +87,23 @@ fn main() -> ExitCode {
             }
         }
     }
+}
+
+/// Starts passing standard input to the UART, as QEMU's `-serial stdio` does.
+///
+/// A separate thread does the reading, so the emulated CPU never waits for input.
+fn read_stdin() -> Receiver<Vec<u8>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut stdin = std::io::stdin();
+        let mut buffer = [0; 4096];
+        while let Ok(count @ 1..) = stdin.read(&mut buffer) {
+            if sender.send(buffer[..count].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    receiver
 }
 
 /// Prints the CPU state, to help work out what the software was doing.

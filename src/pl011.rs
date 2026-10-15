@@ -3,9 +3,11 @@
 //! Only the registers NeOS uses are implemented (ADR 0001). Register offsets are from
 //! the PrimeCell UART (PL011) Technical Reference Manual (Arm DDI 0183).
 
+use std::collections::VecDeque;
 use std::io::Write;
+use std::sync::mpsc::Receiver;
 
-/// Data register.
+/// Data register: written to send a byte, read to take a received one.
 const DR: u64 = 0x00;
 /// Flag register.
 const FR: u64 = 0x18;
@@ -27,9 +29,17 @@ const FR_RXFE: u32 = 1 << 4;
 /// FR: the transmit FIFO is empty.
 const FR_TXFE: u32 = 1 << 7;
 
-/// A PL011 whose transmitted bytes go to `output`.
+/// DR: the bits that hold the data. Nebu never reports a line error in the bits above.
+const DR_DATA: u32 = 0xFF;
+
+/// A PL011 whose transmitted bytes go to `output` and whose received bytes come from
+/// `input`.
 pub struct Pl011 {
     output: Box<dyn Write>,
+    input: Receiver<Vec<u8>>,
+    /// Bytes that have arrived from `input` but not been read yet. Unlike the real
+    /// 16-byte FIFO this never fills, so nothing is ever lost.
+    received: VecDeque<u8>,
     ibrd: u32,
     fbrd: u32,
     lcrh: u32,
@@ -39,17 +49,42 @@ pub struct Pl011 {
 
 impl Pl011 {
     /// Creates a UART in its reset state.
-    pub fn new(output: Box<dyn Write>) -> Self {
+    pub fn new(output: Box<dyn Write>, input: Receiver<Vec<u8>>) -> Self {
         // Reset values from the TRM: TXE and RXE are set, everything else is clear.
-        Pl011 { output, ibrd: 0, fbrd: 0, lcrh: 0, cr: 0x300, imsc: 0 }
+        Pl011 {
+            output,
+            input,
+            received: VecDeque::new(),
+            ibrd: 0,
+            fbrd: 0,
+            lcrh: 0,
+            cr: 0x300,
+            imsc: 0,
+        }
+    }
+
+    /// Whether a received byte is waiting to be read.
+    fn has_input(&mut self) -> bool {
+        while self.received.is_empty() {
+            match self.input.try_recv() {
+                Ok(bytes) => self.received.extend(bytes),
+                Err(_) => return false,
+            }
+        }
+        true
     }
 
     /// Reads the 32-bit register at `offset`, or `None` if it is not implemented.
     pub fn read(&mut self, offset: u64) -> Option<u32> {
         match offset {
-            // Bytes are sent instantly, so the transmit FIFO is always empty. Nebu has
-            // no input yet, so the receive FIFO is always empty too.
-            FR => Some(FR_TXFE | FR_RXFE),
+            // Bytes are sent instantly, so the transmit FIFO is always empty and the
+            // UART is never busy.
+            FR => Some(if self.has_input() { FR_TXFE } else { FR_TXFE | FR_RXFE }),
+            // Like QEMU, reading with nothing received gives 0.
+            DR => {
+                let _ = self.has_input();
+                Some(self.received.pop_front().map_or(0, u32::from) & DR_DATA)
+            }
             IBRD => Some(self.ibrd),
             FBRD => Some(self.fbrd),
             LCRH => Some(self.lcrh),
@@ -80,5 +115,26 @@ impl Pl011 {
             _ => return None,
         }
         Some(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::*;
+
+    #[test]
+    fn receives_bytes_in_order_and_reports_an_empty_fifo() {
+        let (sender, receiver) = mpsc::channel();
+        let mut uart = Pl011::new(Box::new(std::io::sink()), receiver);
+        assert_eq!(uart.read(FR), Some(FR_TXFE | FR_RXFE));
+
+        sender.send(vec![b'h', b'i']).unwrap();
+        assert_eq!(uart.read(FR), Some(FR_TXFE));
+        assert_eq!(uart.read(DR), Some(u32::from(b'h')));
+        assert_eq!(uart.read(DR), Some(u32::from(b'i')));
+        assert_eq!(uart.read(FR), Some(FR_TXFE | FR_RXFE));
+        assert_eq!(uart.read(DR), Some(0));
     }
 }

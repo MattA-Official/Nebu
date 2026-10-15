@@ -20,10 +20,10 @@ it. QEMU's `raspi3b` machine is the reference that both projects are checked aga
 
 ## Status
 
-Nebu runs NeOS step 2: it boots the kernel, prints its banner over the PL011 UART and
-reproduces QEMU's output byte for byte, including the panic path. It currently
-implements 30 A64 instructions, two system registers and one device; see
-[`docs/implemented.md`](docs/implemented.md).
+Nebu runs NeOS step 3: it boots the kernel directly or through the NeOS chainloader,
+which receives the kernel over the PL011 UART, and reproduces QEMU's output byte for
+byte, including the panic path. It currently implements 42 A64 instructions, two
+system registers and two devices; see [`docs/implemented.md`](docs/implemented.md).
 
 ## Building and running
 
@@ -39,6 +39,9 @@ cargo build --release
 |------------------|--------|
 | `--semihosting`  | Lets `hlt #0xf000` make semihosting calls, as QEMU's `-semihosting` does. NeOS test builds use this to exit. |
 | `--trace`        | Prints every instruction to standard error before running it. |
+
+The emulated serial port is Nebu's standard output and standard input, like QEMU's
+`-serial stdio`.
 
 Usually you won't run Nebu directly: NeOS's `cargo xtask run --nebu` and
 `cargo xtask test` build and run it for you from a checkout next to NeOS.
@@ -59,6 +62,7 @@ nebu: stopped at pc 0x000801bc: cannot run instruction 0xd65f03c0: instruction n
 | `src/cpu.rs`     | Registers, flags and the execution of each instruction. |
 | `src/bus.rs`     | The address space: sparse RAM and the device map.       |
 | `src/pl011.rs`   | The PL011 UART.                                         |
+| `src/gpio.rs`    | The GPIO controller's pin function registers.           |
 | `src/main.rs`    | Command-line handling and the run loop.                 |
 
 ## Licence
