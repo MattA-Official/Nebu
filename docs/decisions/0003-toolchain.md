@@ -1,6 +1,6 @@
 # 0003. Toolchain
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-15
 
 ## Context

@@ -1,6 +1,6 @@
 # 0005. Licence
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-15
 
 ## Context
@@ -20,8 +20,8 @@ Possible, but it would complicate sharing code between the projects.
 
 ## Decision
 
-Adopt **Option A**: Nebu uses whatever licence NeOS ADR 0005 settles on. A
-`LICENSE` file is added at the same time as NeOS's.
+Adopt **Option A**: Nebu uses the **MIT licence**, as NeOS ADR 0005 decided. The
+licence text is in [`LICENSE`](../../LICENSE).
 
 ## Consequences
 

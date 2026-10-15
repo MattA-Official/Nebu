@@ -33,3 +33,7 @@ from `rust-toolchain.toml`.
 cargo build
 cargo run -- path/to/kernel8.img
 ```
+
+## Licence
+
+[MIT](LICENSE).

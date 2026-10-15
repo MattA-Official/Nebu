@@ -3,6 +3,7 @@ name = "nebu"
 version = "0.1.0"
 edition = "2024"
 description = "Nebuchadnezzar: a minimal Raspberry Pi 3B emulator developed in lockstep with NeOS"
+license = "MIT"
 publish = false
 
 # No dependencies, ever. See docs/decisions/0002-no-dependencies-no-unsafe.md.

@@ -13,9 +13,9 @@ works live here.
 
 | No.  | Title                                                            | Status   |
 |------|------------------------------------------------------------------|----------|
-| 0000 | [Record architecture decisions](0000-record-architecture-decisions.md) | Proposed |
-| 0001 | [Scope: emulate only what NeOS uses](0001-scope.md)              | Proposed |
-| 0002 | [No dependencies, no unsafe](0002-no-dependencies-no-unsafe.md)  | Proposed |
-| 0003 | [Toolchain](0003-toolchain.md)                                   | Proposed |
-| 0004 | [Execution model: an interpreter](0004-execution-model.md)      | Proposed |
-| 0005 | [Licence](0005-licence.md)                                       | Proposed |
+| 0000 | [Record architecture decisions](0000-record-architecture-decisions.md) | Accepted |
+| 0001 | [Scope: emulate only what NeOS uses](0001-scope.md)              | Accepted |
+| 0002 | [No dependencies, no unsafe](0002-no-dependencies-no-unsafe.md)  | Accepted |
+| 0003 | [Toolchain](0003-toolchain.md)                                   | Accepted |
+| 0004 | [Execution model: an interpreter](0004-execution-model.md)      | Accepted |
+| 0005 | [Licence](0005-licence.md)                                       | Accepted |

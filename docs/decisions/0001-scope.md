@@ -1,6 +1,6 @@
 # 0001. Scope: emulate only what NeOS uses
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-15
 
 ## Context
