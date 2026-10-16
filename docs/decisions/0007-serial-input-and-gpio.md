@@ -1,6 +1,6 @@
 # 0007. Serial input and GPIO
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-15
 
 ## Context
