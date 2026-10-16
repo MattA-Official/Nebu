@@ -1,6 +1,6 @@
 # 0006. Machine model
 
-- **Status:** Accepted
+- **Status:** Accepted; points 3 and 5 amended by [0007](0007-serial-input-and-gpio.md)
 - **Date:** 2026-10-15
 
 ## Context

@@ -5,10 +5,13 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::gpio::Gpio;
 use crate::pl011::Pl011;
 
 /// RAM occupies the bottom of the address space, up to the peripherals.
 const RAM_END: u64 = 0x3F00_0000;
+/// The GPIO controller.
+const GPIO_BASE: u64 = 0x3F20_0000;
 /// The PL011 UART (UART0).
 const UART0_BASE: u64 = 0x3F20_1000;
 /// The size of one device's register window.
@@ -68,13 +71,14 @@ impl Ram {
 /// The machine's address space.
 pub struct Bus {
     ram: Ram,
+    gpio: Gpio,
     uart: Pl011,
 }
 
 impl Bus {
-    /// Creates a bus with empty RAM and the given UART.
+    /// Creates a bus with empty RAM, GPIO in its reset state and the given UART.
     pub fn new(uart: Pl011) -> Self {
-        Bus { ram: Ram::default(), uart }
+        Bus { ram: Ram::default(), gpio: Gpio::default(), uart }
     }
 
     /// Copies `bytes` into RAM at `address`, as the firmware does with the kernel image.
@@ -108,11 +112,16 @@ impl Bus {
             return Ok(self.read_ram(address, size));
         }
         match device_at(address) {
-            Some(("PL011 UART", offset)) if size == 4 => self
+            Some((device @ "GPIO", offset)) if size == 4 => self
+                .gpio
+                .read(offset)
+                .map(u64::from)
+                .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "PL011 UART", offset)) if size == 4 => self
                 .uart
                 .read(offset)
                 .map(u64::from)
-                .ok_or(BusError::DeviceRegister { device: "PL011 UART", offset }),
+                .ok_or(BusError::DeviceRegister { device, offset }),
             Some((device, offset)) => Err(BusError::DeviceRegister { device, offset }),
             None => Err(BusError::Unmapped),
         }
@@ -130,10 +139,14 @@ impl Bus {
             return Ok(());
         }
         match device_at(address) {
-            Some(("PL011 UART", offset)) if size == 4 => self
+            Some((device @ "GPIO", offset)) if size == 4 => self
+                .gpio
+                .write(offset, value as u32)
+                .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "PL011 UART", offset)) if size == 4 => self
                 .uart
                 .write(offset, value as u32)
-                .ok_or(BusError::DeviceRegister { device: "PL011 UART", offset }),
+                .ok_or(BusError::DeviceRegister { device, offset }),
             Some((device, offset)) => Err(BusError::DeviceRegister { device, offset }),
             None => Err(BusError::Unmapped),
         }
@@ -148,6 +161,9 @@ impl Bus {
 
 /// Finds the device whose registers include `address`, and the offset within it.
 fn device_at(address: u64) -> Option<(&'static str, u64)> {
+    if (GPIO_BASE..GPIO_BASE + DEVICE_WINDOW).contains(&address) {
+        return Some(("GPIO", address - GPIO_BASE));
+    }
     if (UART0_BASE..UART0_BASE + DEVICE_WINDOW).contains(&address) {
         return Some(("PL011 UART", address - UART0_BASE));
     }
@@ -159,7 +175,7 @@ mod tests {
     use super::*;
 
     fn bus() -> Bus {
-        Bus::new(Pl011::new(Box::new(std::io::sink())))
+        Bus::new(Pl011::new(Box::new(std::io::sink()), std::sync::mpsc::channel().1))
     }
 
     #[test]
