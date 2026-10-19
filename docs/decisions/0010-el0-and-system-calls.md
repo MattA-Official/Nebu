@@ -1,6 +1,6 @@
 # 0010. EL0 and system calls
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-19
 
 ## Context
