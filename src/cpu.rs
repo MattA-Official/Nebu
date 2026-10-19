@@ -10,6 +10,7 @@ use crate::decode::decode_bit_masks;
 use crate::decode::{
     DecodeError, Extend, Index, Instruction, Shift, SystemRegister, Width, decode,
 };
+use crate::mmu::{self, Access, SCTLR_M};
 
 /// MPIDR_EL1 for core 0, as QEMU reports it: bit 31 is RES1 and the core number is
 /// in the low byte.
@@ -60,8 +61,10 @@ pub enum Fault {
     /// this exception level. Nebu does not model the resulting exception.
     SystemRegisterAccess { register: SystemRegister, el: u8, write: bool },
     /// The software asked for something the architecture allows but Nebu does not
-    /// model, such as turning on the MMU.
+    /// model, such as a page size other than 4 KiB.
     Unsupported(&'static str),
+    /// Reading a page table entry failed.
+    PageTable { address: u64, error: BusError },
     /// `hlt` with semihosting off: the core stops for an external debugger.
     Halt { imm16: u16 },
     /// A semihosting operation Nebu does not implement.
@@ -90,6 +93,9 @@ impl fmt::Display for Fault {
                 )
             }
             Fault::Unsupported(what) => write!(f, "not implemented: {what}"),
+            Fault::PageTable { address, error } => {
+                write!(f, "reading the page table entry at {address:#x} failed: {error}")
+            }
             Fault::Halt { imm16 } => {
                 write!(f, "hlt #{imm16:#x} with semihosting off (the core halts for a debugger)")
             }
@@ -103,7 +109,8 @@ impl fmt::Display for Fault {
 /// The system registers Nebu models, apart from the read-only identification ones.
 #[derive(Clone, Copy, Debug, Default)]
 struct SystemRegisters {
-    sctlr_el1: u64,
+    /// SCTLR_EL1, TCR_EL1, MAIR_EL1, TTBR0_EL1 and TTBR1_EL1.
+    translation: mmu::Registers,
     spsr_el1: u64,
     elr_el1: u64,
     esr_el1: u64,
@@ -118,14 +125,37 @@ struct SystemRegisters {
 
 /// HCR_EL2.RW: EL1 runs AArch64.
 const HCR_EL2_RW: u64 = 1 << 31;
-/// SCTLR_ELx.M: the MMU is on.
-const SCTLR_M: u64 = 1;
+/// The SCTLR_EL1 bits Nebu models: the RES1 bits, M (the MMU), C (the data cache),
+/// SA and SA0 (stack alignment checks) and I (the instruction cache). Nebu has no
+/// caches, and halts on any misaligned SP-based access whether or not SA is set.
+const SCTLR_EL1_MODELLED: u64 = 0x30d0_0800 | 1 << 12 | 1 << 4 | 1 << 3 | 1 << 2 | SCTLR_M;
 
 /// Exception classes, the top 6 bits of ESR_ELx.
 const EC_UNKNOWN: u64 = 0x00;
+const EC_INSTRUCTION_ABORT_LOWER_EL: u64 = 0x20;
+const EC_INSTRUCTION_ABORT_SAME_EL: u64 = 0x21;
+const EC_DATA_ABORT_LOWER_EL: u64 = 0x24;
+const EC_DATA_ABORT_SAME_EL: u64 = 0x25;
 const EC_BRK: u64 = 0x3C;
+/// ESR_ELx.WnR for a data abort: the access was a write.
+const ESR_WNR: u64 = 1 << 6;
 /// ESR_ELx.IL: the instruction that caused the exception was 32 bits long.
 const ESR_IL: u64 = 1 << 25;
+
+/// Why an instruction stopped before it finished.
+enum Stop {
+    /// Nebu cannot carry on.
+    Fault(Fault),
+    /// An instruction fetch or data access failed translation, so the CPU takes an
+    /// abort instead of finishing the instruction.
+    Abort { access: Access, address: u64, status: u8 },
+}
+
+impl From<Fault> for Stop {
+    fn from(fault: Fault) -> Self {
+        Stop::Fault(fault)
+    }
+}
 
 /// The state of one core.
 pub struct Cpu {
@@ -202,6 +232,9 @@ impl Cpu {
     /// Takes a synchronous exception with class `ec` and syndrome `iss`, returning to
     /// `preferred_return` afterwards. Returns the address of the vector to run.
     fn take_exception(&mut self, ec: u64, iss: u64, preferred_return: u64) -> Result<u64, Fault> {
+        // Instruction and data aborts from EL0 use the "lower EL" classes, one less
+        // than the "same EL" ones.
+        let lower = self.el == 0;
         // With HCR_EL2.TGE clear, exceptions from EL0 and EL1 go to EL1. Exceptions at
         // EL2 would go to EL2's own vectors, which nothing uses.
         let offset = match (self.el, self.spsel) {
@@ -212,6 +245,11 @@ impl Cpu {
         };
         self.sys.spsr_el1 = self.pstate();
         self.sys.elr_el1 = preferred_return;
+        let ec = match ec {
+            EC_INSTRUCTION_ABORT_SAME_EL if lower => EC_INSTRUCTION_ABORT_LOWER_EL,
+            EC_DATA_ABORT_SAME_EL if lower => EC_DATA_ABORT_LOWER_EL,
+            ec => ec,
+        };
         self.sys.esr_el1 = ec << 26 | ESR_IL | iss;
         self.el = 1;
         self.spsel = true;
@@ -258,7 +296,7 @@ impl Cpu {
         use SystemRegister::*;
         match register {
             MpidrEl1 | CurrentEl | SctlrEl1 | SpsrEl1 | ElrEl1 | SpEl0 | EsrEl1 | FarEl1
-            | VbarEl1 => 1,
+            | VbarEl1 | TcrEl1 | MairEl1 | Ttbr0El1 | Ttbr1El1 => 1,
             HcrEl2 | CnthctlEl2 | CntvoffEl2 | SpsrEl2 | ElrEl2 | SpEl1 => 2,
         }
     }
@@ -272,7 +310,11 @@ impl Cpu {
         Ok(match register {
             MpidrEl1 => MPIDR_CORE_0,
             CurrentEl => u64::from(self.el) << 2,
-            SctlrEl1 => self.sys.sctlr_el1,
+            SctlrEl1 => self.sys.translation.sctlr,
+            TcrEl1 => self.sys.translation.tcr,
+            MairEl1 => self.sys.translation.mair,
+            Ttbr0El1 => self.sys.translation.ttbr0,
+            Ttbr1El1 => self.sys.translation.ttbr1,
             SpsrEl1 => self.sys.spsr_el1,
             ElrEl1 => self.sys.elr_el1,
             SpEl0 => self.sp_el[0],
@@ -300,11 +342,18 @@ impl Cpu {
                 return Err(Fault::SystemRegisterAccess { register, el: self.el, write: true });
             }
             SctlrEl1 => {
-                if value & SCTLR_M != 0 {
-                    return Err(Fault::Unsupported("turning on the MMU"));
+                if value & !SCTLR_EL1_MODELLED != 0 {
+                    return Err(Fault::Unsupported(
+                        "SCTLR_EL1 bits other than M, C, SA, SA0 and I",
+                    ));
                 }
-                self.sys.sctlr_el1 = value;
+                self.sys.translation.sctlr = value;
             }
+            // Checked when they are used for a translation.
+            TcrEl1 => self.sys.translation.tcr = value,
+            MairEl1 => self.sys.translation.mair = value,
+            Ttbr0El1 => self.sys.translation.ttbr0 = value,
+            Ttbr1El1 => self.sys.translation.ttbr1 = value,
             SpsrEl1 => self.sys.spsr_el1 = value,
             ElrEl1 => self.sys.elr_el1 = value,
             SpEl0 => self.sp_el[0] = value,
@@ -369,6 +418,69 @@ impl Cpu {
         if condition & 1 == 1 && condition != 0b1111 { !result } else { result }
     }
 
+    /// Translates `address` for `access` at the current exception level.
+    fn translate(
+        &self,
+        bus: &mut Bus,
+        address: u64,
+        access: Access,
+    ) -> Result<mmu::Translation, Stop> {
+        mmu::translate(bus, &self.sys.translation, address, access, self.el).map_err(|error| {
+            match error {
+                mmu::Error::Abort { status } => Stop::Abort { access, address, status },
+                mmu::Error::Table { address, error } => {
+                    Stop::Fault(Fault::PageTable { address, error })
+                }
+                mmu::Error::Unsupported(what) => Stop::Fault(Fault::Unsupported(what)),
+            }
+        })
+    }
+
+    /// Reads `size` bytes at virtual address `address`.
+    fn load(&self, bus: &mut Bus, address: u64, size: u64) -> Result<u64, Stop> {
+        let translation = self.translate(bus, address, Access::Read)?;
+        let physical = translation.address;
+        if address.is_multiple_of(size) || translation.device {
+            // A misaligned access to Device memory is an error from the bus.
+            return Ok(bus.read(physical, size).map_err(|error| Fault::Memory {
+                address,
+                write: false,
+                error,
+            })?);
+        }
+        // Normal memory allows misaligned accesses: do it a byte at a time.
+        if physical % 4096 + size > 4096 {
+            return Err(Fault::Unsupported("a misaligned access that crosses a page").into());
+        }
+        let mut value = 0;
+        for index in 0..size {
+            let byte = bus.read(physical + index, 1).map_err(|error| Fault::Memory {
+                address,
+                write: false,
+                error,
+            })?;
+            value |= byte << (8 * index);
+        }
+        Ok(value)
+    }
+
+    /// Writes the low `size` bytes of `value` at virtual address `address`.
+    fn store(&self, bus: &mut Bus, address: u64, size: u64, value: u64) -> Result<(), Stop> {
+        let translation = self.translate(bus, address, Access::Write)?;
+        let physical = translation.address;
+        let fault = |error| Fault::Memory { address, write: true, error };
+        if address.is_multiple_of(size) || translation.device {
+            return Ok(bus.write(physical, size, value).map_err(fault)?);
+        }
+        if physical % 4096 + size > 4096 {
+            return Err(Fault::Unsupported("a misaligned access that crosses a page").into());
+        }
+        for index in 0..size {
+            bus.write(physical + index, 1, value >> (8 * index)).map_err(fault)?;
+        }
+        Ok(())
+    }
+
     /// Computes the base address of a load or store whose base register is `rn`.
     fn base(&self, rn: u8) -> Result<u64, Fault> {
         if rn == 31 && !self.sp().is_multiple_of(16) {
@@ -378,10 +490,38 @@ impl Cpu {
     }
 
     /// Fetches, decodes and executes one instruction. With `trace`, prints it first.
+    ///
+    /// If the instruction's fetch or one of its data accesses fails translation, the
+    /// CPU takes an abort instead, and the next instruction is the abort handler's.
     pub fn step(&mut self, bus: &mut Bus, trace: bool) -> Result<Step, Fault> {
+        match self.execute(bus, trace) {
+            Ok(step) => Ok(step),
+            Err(Stop::Fault(fault)) => Err(fault),
+            Err(Stop::Abort { access, address, status }) => {
+                if trace {
+                    eprintln!("abort: {access:?} of {address:#x}, fault status {status:#04x}");
+                }
+                let (ec, iss) = match access {
+                    Access::Fetch => (EC_INSTRUCTION_ABORT_SAME_EL, u64::from(status)),
+                    Access::Read => (EC_DATA_ABORT_SAME_EL, u64::from(status)),
+                    Access::Write => (EC_DATA_ABORT_SAME_EL, ESR_WNR | u64::from(status)),
+                };
+                // The interrupted instruction is retried when the handler returns.
+                self.pc = self.take_exception(ec, iss, self.pc)?;
+                self.sys.far_el1 = address;
+                Ok(Step::Continue)
+            }
+        }
+    }
+
+    fn execute(&mut self, bus: &mut Bus, trace: bool) -> Result<Step, Stop> {
         let pc = self.pc;
-        let word =
-            bus.fetch(pc).map_err(|error| Fault::Memory { address: pc, write: false, error })?;
+        let translation = self.translate(bus, pc, Access::Fetch)?;
+        let word = bus.fetch(translation.address).map_err(|error| Fault::Memory {
+            address: pc,
+            write: false,
+            error,
+        })?;
         let instruction = decode(word).map_err(|error| Fault::Decode { word, error })?;
         if trace {
             eprintln!("{pc:#010x}: {word:08x}  {instruction}");
@@ -394,6 +534,9 @@ impl Cpu {
         use Instruction::*;
         match instruction {
             Adr { rd, offset } => self.write(rd, Width::W64, branch(offset)),
+            Adrp { rd, offset } => {
+                self.write(rd, Width::W64, (pc & !0xFFF).wrapping_add_signed(offset));
+            }
             AddImmediate { width, rd, rn, imm } => {
                 let value = self.read_sp(rn, width).wrapping_add(imm);
                 self.write_sp(rd, width, value);
@@ -409,6 +552,16 @@ impl Cpu {
             OrrImmediate { width, rd, rn, imm } => {
                 let value = self.read(rn, width) | imm;
                 self.write_sp(rd, width, value);
+            }
+            EorImmediate { width, rd, rn, imm } => {
+                let value = self.read(rn, width) ^ imm;
+                self.write_sp(rd, width, value);
+            }
+            AndsImmediate { width, rd, rn, imm } => {
+                let value = self.read(rn, width) & imm;
+                self.write(rd, width, value);
+                let top = width.bits() - 1;
+                self.flags = Flags { n: value >> top & 1 == 1, z: value == 0, c: false, v: false };
             }
             Movn { width, rd, imm16, shift } => {
                 self.write(rd, width, !(u64::from(imm16) << shift));
@@ -460,6 +613,10 @@ impl Cpu {
                 let operand2 = shift_register(self.read(rm, width), shift, amount, width);
                 self.write(rd, width, self.read(rn, width) | operand2);
             }
+            OrnShiftedRegister { width, rd, rn, rm, shift, amount } => {
+                let operand2 = shift_register(self.read(rm, width), shift, amount, width);
+                self.write(rd, width, self.read(rn, width) | (!operand2 & width.mask()));
+            }
             EorShiftedRegister { width, rd, rn, rm, shift, amount } => {
                 let operand2 = shift_register(self.read(rm, width), shift, amount, width);
                 self.write(rd, width, self.read(rn, width) ^ operand2);
@@ -480,6 +637,25 @@ impl Cpu {
                 let source = if self.condition_holds(condition) { rn } else { rm };
                 self.write(rd, width, self.read(source, width));
             }
+            Csinc { width, rd, rn, rm, condition } => {
+                let value = if self.condition_holds(condition) {
+                    self.read(rn, width)
+                } else {
+                    self.read(rm, width).wrapping_add(1)
+                };
+                self.write(rd, width, value);
+            }
+            CcmpRegister { width, rn, rm, nzcv, condition } => {
+                let operand2 = self.read(rm, width);
+                self.conditional_compare(width, rn, operand2, nzcv, condition);
+            }
+            CcmpImmediate { width, rn, imm, nzcv, condition } => {
+                self.conditional_compare(width, rn, u64::from(imm), nzcv, condition);
+            }
+            SubShiftedRegister { width, rd, rn, rm, shift, amount } => {
+                let operand2 = shift_register(self.read(rm, width), shift, amount, width);
+                self.write(rd, width, self.read(rn, width).wrapping_sub(operand2));
+            }
             AddShiftedRegister { width, rd, rn, rm, shift, amount } => {
                 let operand2 = shift_register(self.read(rm, width), shift, amount, width);
                 self.write(rd, width, self.read(rn, width).wrapping_add(operand2));
@@ -498,6 +674,10 @@ impl Cpu {
                 next = branch(offset);
             }
             Br { rn } | Ret { rn } => next = self.read(rn, Width::W64),
+            Blr { rn } => {
+                next = self.read(rn, Width::W64);
+                self.write(30, Width::W64, pc.wrapping_add(4));
+            }
             BCond { condition, offset } => {
                 if self.condition_holds(condition) {
                     next = branch(offset);
@@ -525,16 +705,16 @@ impl Cpu {
             }
             Hlt { imm16 } => {
                 if !(self.semihosting && imm16 == SEMIHOSTING_HLT) {
-                    return Err(Fault::Halt { imm16 });
+                    return Err(Fault::Halt { imm16 }.into());
                 }
                 result = self.semihosting_call(bus)?;
             }
             Brk { imm16 } => next = self.take_exception(EC_BRK, u64::from(imm16), pc)?,
             Udf { .. } => next = self.take_exception(EC_UNKNOWN, 0, pc)?,
             Eret => next = self.exception_return()?,
-            // No pipeline or caches are modelled, so a barrier has nothing to wait for
-            // and there is no instruction cache to invalidate.
-            Nop | Isb | Dsb { .. } | IcIallu => {}
+            // No pipeline, caches or TLB are modelled, so a barrier has nothing to wait
+            // for and there is nothing to invalidate.
+            Nop | Isb | Dsb { .. } | IcIallu | TlbiVmalle1 => {}
             Wfe => {
                 if self.event {
                     self.event = false;
@@ -550,12 +730,12 @@ impl Cpu {
                 self.write_system_register(register, self.read(rt, Width::W64))?;
             }
             LdrLiteral { width, rt, offset } => {
-                let value = load(bus, branch(offset), width.bytes())?;
+                let value = self.load(bus, branch(offset), width.bytes())?;
                 self.write(rt, width, value);
             }
             LdrImmediate { width, rt, rn, index, offset } => {
                 let (address, writeback) = self.address(rn, index, offset)?;
-                let value = load(bus, address, width.bytes())?;
+                let value = self.load(bus, address, width.bytes())?;
                 if let Some(base) = writeback {
                     self.write_sp(rn, Width::W64, base);
                 }
@@ -563,14 +743,14 @@ impl Cpu {
             }
             StrImmediate { width, rt, rn, index, offset } => {
                 let (address, writeback) = self.address(rn, index, offset)?;
-                store(bus, address, width.bytes(), self.read(rt, width))?;
+                self.store(bus, address, width.bytes(), self.read(rt, width))?;
                 if let Some(base) = writeback {
                     self.write_sp(rn, Width::W64, base);
                 }
             }
             LdrbImmediate { rt, rn, index, offset } => {
                 let (address, writeback) = self.address(rn, index, offset)?;
-                let value = load(bus, address, 1)?;
+                let value = self.load(bus, address, 1)?;
                 if let Some(base) = writeback {
                     self.write_sp(rn, Width::W64, base);
                 }
@@ -578,37 +758,42 @@ impl Cpu {
             }
             LdrbRegister { rt, rn, rm, extend } => {
                 let address = self.base(rn)?.wrapping_add(self.extend_register(rm, extend));
-                let value = load(bus, address, 1)?;
+                let value = self.load(bus, address, 1)?;
                 self.write(rt, Width::W32, value);
             }
             LdrRegister { width, rt, rn, rm, extend, amount } => {
                 let offset = self.extend_register(rm, extend) << amount;
                 let address = self.base(rn)?.wrapping_add(offset);
-                let value = load(bus, address, width.bytes())?;
+                let value = self.load(bus, address, width.bytes())?;
                 self.write(rt, width, value);
+            }
+            StrRegister { width, rt, rn, rm, extend, amount } => {
+                let offset = self.extend_register(rm, extend) << amount;
+                let address = self.base(rn)?.wrapping_add(offset);
+                self.store(bus, address, width.bytes(), self.read(rt, width))?;
             }
             StrbImmediate { rt, rn, index, offset } => {
                 let (address, writeback) = self.address(rn, index, offset)?;
-                store(bus, address, 1, self.read(rt, Width::W32))?;
+                self.store(bus, address, 1, self.read(rt, Width::W32))?;
                 if let Some(base) = writeback {
                     self.write_sp(rn, Width::W64, base);
                 }
             }
             StrhImmediate { rt, rn, index, offset } => {
                 let (address, writeback) = self.address(rn, index, offset)?;
-                store(bus, address, 2, self.read(rt, Width::W32))?;
+                self.store(bus, address, 2, self.read(rt, Width::W32))?;
                 if let Some(base) = writeback {
                     self.write_sp(rn, Width::W64, base);
                 }
             }
             Stur { width, rt, rn, offset } => {
                 let (address, _) = self.address(rn, Index::Offset, offset)?;
-                store(bus, address, width.bytes(), self.read(rt, width))?;
+                self.store(bus, address, width.bytes(), self.read(rt, width))?;
             }
             Stp { width, rt, rt2, rn, index, offset } => {
                 let (address, writeback) = self.address(rn, index, offset)?;
-                store(bus, address, width.bytes(), self.read(rt, width))?;
-                store(
+                self.store(bus, address, width.bytes(), self.read(rt, width))?;
+                self.store(
                     bus,
                     address.wrapping_add(width.bytes()),
                     width.bytes(),
@@ -620,8 +805,8 @@ impl Cpu {
             }
             Ldp { width, rt, rt2, rn, index, offset } => {
                 let (address, writeback) = self.address(rn, index, offset)?;
-                let first = load(bus, address, width.bytes())?;
-                let second = load(bus, address.wrapping_add(width.bytes()), width.bytes())?;
+                let first = self.load(bus, address, width.bytes())?;
+                let second = self.load(bus, address.wrapping_add(width.bytes()), width.bytes())?;
                 if let Some(base) = writeback {
                     self.write_sp(rn, Width::W64, base);
                 }
@@ -632,6 +817,28 @@ impl Cpu {
 
         self.pc = next;
         Ok(result)
+    }
+
+    /// CCMP: if `condition` holds, sets the flags as comparing `rn` with `operand2`
+    /// would, and otherwise to `nzcv`.
+    fn conditional_compare(
+        &mut self,
+        width: Width,
+        rn: u8,
+        operand2: u64,
+        nzcv: u8,
+        condition: u8,
+    ) {
+        self.flags = if self.condition_holds(condition) {
+            add_with_carry(self.read(rn, width), !operand2 & width.mask(), true, width).1
+        } else {
+            Flags {
+                n: nzcv & 0b1000 != 0,
+                z: nzcv & 0b0100 != 0,
+                c: nzcv & 0b0010 != 0,
+                v: nzcv & 0b0001 != 0,
+            }
+        };
     }
 
     /// The architecture's `ExtendReg` for a register offset, before any shift.
@@ -656,28 +863,20 @@ impl Cpu {
     }
 
     /// Performs the semihosting call described by x0 and x1.
-    fn semihosting_call(&mut self, bus: &mut Bus) -> Result<Step, Fault> {
+    fn semihosting_call(&mut self, bus: &mut Bus) -> Result<Step, Stop> {
         // The operation number is in w0.
         let operation = self.read(0, Width::W32);
         if operation != SYS_EXIT {
-            return Err(Fault::Semihosting { operation });
+            return Err(Fault::Semihosting { operation }.into());
         }
         // On AArch64, x1 points to a block holding the reason and the exit code.
         let block = self.read(1, Width::W64);
-        let reason = load(bus, block, 8)?;
-        let code = load(bus, block.wrapping_add(8), 8)?;
+        let reason = self.load(bus, block, 8)?;
+        let code = self.load(bus, block.wrapping_add(8), 8)?;
         // Like QEMU, any reason other than a normal exit counts as failure.
         let code = if reason == ADP_STOPPED_APPLICATION_EXIT { code as i32 } else { 1 };
         Ok(Step::Exit(code))
     }
-}
-
-fn load(bus: &mut Bus, address: u64, size: u64) -> Result<u64, Fault> {
-    bus.read(address, size).map_err(|error| Fault::Memory { address, write: false, error })
-}
-
-fn store(bus: &mut Bus, address: u64, size: u64, value: u64) -> Result<(), Fault> {
-    bus.write(address, size, value).map_err(|error| Fault::Memory { address, write: true, error })
 }
 
 /// The `(wmask, tmask)` pair for a bitfield instruction's `immr` and `imms`.
@@ -893,6 +1092,35 @@ mod tests {
         assert_eq!(cpu.x[3], 6);
         assert_eq!(cpu.x[4], 3);
         assert_eq!(cpu.flags, Flags { n: false, z: false, c: false, v: false });
+    }
+
+    #[test]
+    fn translation_faults_become_data_aborts() {
+        // With the MMU on and TTBR0 switched off: movz x1, #0x1000; str xzr, [x1].
+        let mut bus = Bus::new(uart());
+        let program: [u32; 2] = [0xd2820001, 0xf900003f];
+        let bytes: Vec<u8> = program.iter().flat_map(|word| word.to_le_bytes()).collect();
+        bus.load(0x80000, &bytes).unwrap();
+        // One level 1 table at 0x10000, mapping the first 1 GiB as a block of normal,
+        // accessed, kernel-writable memory at the top of the address space.
+        bus.write(0x10000, 8, 0x705).unwrap();
+        let mut cpu = Cpu::new(0xFFFF_FF80_0008_0000, false);
+        cpu.el = 1;
+        cpu.sys.vbar_el1 = 0xFFFF_FF80_0000_0800;
+        cpu.sys.translation = mmu::Registers {
+            sctlr: SCTLR_M,
+            tcr: 0b10 << 30 | 25 << 16 | 1 << 7 | 25,
+            mair: 0xFF04,
+            ttbr0: 0,
+            ttbr1: 0x10000,
+        };
+        cpu.step(&mut bus, false).unwrap();
+        cpu.step(&mut bus, false).unwrap();
+        // A level 0 translation fault on a write, from the kernel, at the store.
+        assert_eq!(cpu.sys.esr_el1, 0x9600_0044);
+        assert_eq!(cpu.sys.far_el1, 0x1000);
+        assert_eq!(cpu.sys.elr_el1, 0xFFFF_FF80_0008_0004);
+        assert_eq!(cpu.pc, 0xFFFF_FF80_0000_0A00);
     }
 
     #[test]
