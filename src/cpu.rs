@@ -752,6 +752,12 @@ impl Cpu {
                 self.write(rd, width, value);
                 self.flags = flags;
             }
+            Sbc { width, rd, rn, rm } => {
+                let operand2 = !self.read(rm, width) & width.mask();
+                let (value, _) =
+                    add_with_carry(self.read(rn, width), operand2, self.flags.c, width);
+                self.write(rd, width, value);
+            }
             Sbcs { width, rd, rn, rm } => {
                 let operand2 = !self.read(rm, width) & width.mask();
                 let (value, flags) =
@@ -1158,6 +1164,21 @@ mod tests {
         cpu.x[5] = 0xFFFF_FFFF;
         cpu.step(&mut bus, false).unwrap();
         assert_eq!(cpu.flags, Flags { n: false, z: true, c: true, v: false });
+    }
+
+    #[test]
+    fn sbc_subtracts_the_borrow_and_keeps_the_flags() {
+        // sbc x16, x9, xzr: x9 - 0 - (1 - C).
+        for (carry, expected) in [(true, 5), (false, 4)] {
+            let mut bus = Bus::new(uart());
+            bus.load(0x80000, &0xda1f0130u32.to_le_bytes()).unwrap();
+            let mut cpu = Cpu::new(0x80000, false);
+            cpu.x[9] = 5;
+            cpu.flags = Flags { n: true, z: false, c: carry, v: false };
+            cpu.step(&mut bus, false).unwrap();
+            assert_eq!(cpu.x[16], expected);
+            assert_eq!(cpu.flags, Flags { n: true, z: false, c: carry, v: false });
+        }
     }
 
     #[test]

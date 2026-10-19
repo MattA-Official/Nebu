@@ -257,6 +257,8 @@ pub enum Instruction {
     /// `rm` 31 is the zero register. `option` is the field's value: UXTB, UXTH,
     /// UXTW, UXTX, then SXTB, SXTH, SXTW, SXTX.
     SubsExtendedRegister { width: Width, rd: u8, rn: u8, rm: u8, option: u8, amount: u8 },
+    /// SBC: `rd = rn - rm - (1 - C)`. 31 is the zero register.
+    Sbc { width: Width, rd: u8, rn: u8, rm: u8 },
     /// SBCS: `rd = rn - rm - (1 - C)`, setting the flags. 31 is the zero register.
     Sbcs { width: Width, rd: u8, rn: u8, rm: u8 },
     /// AND (shifted register): `rd = rn & (rm shifted)`. 31 is the zero register.
@@ -943,13 +945,14 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
         };
     }
 
-    // Add/subtract (with carry). Only SBCS (op = 1, S = 1).
+    // Add/subtract (with carry). Only SBC and SBCS (op = 1).
     if bits(word, 28, 21) == 0b1101_0000 && bits(word, 15, 10) == 0 {
         let width = Width::from_bit(bits(word, 31, 31));
         let (rd, rn, rm) = (reg(word, 0), reg(word, 5), reg(word, 16));
         return match bits(word, 30, 29) {
+            0b10 => Ok(Instruction::Sbc { width, rd, rn, rm }),
             0b11 => Ok(Instruction::Sbcs { width, rd, rn, rm }),
-            _ => Err(DecodeError::Unimplemented), // ADC, ADCS, SBC
+            _ => Err(DecodeError::Unimplemented), // ADC, ADCS
         };
     }
 
@@ -1220,6 +1223,9 @@ impl fmt::Display for Instruction {
                     zr(rm, source),
                     EXTENDS[usize::from(option)]
                 )
+            }
+            Sbc { width, rd, rn, rm } => {
+                write!(f, "sbc {}, {}, {}", zr(rd, width), zr(rn, width), zr(rm, width))
             }
             Sbcs { width, rd, rn, rm } => {
                 write!(f, "sbcs {}, {}, {}", zr(rd, width), zr(rn, width), zr(rm, width))
@@ -1652,6 +1658,7 @@ mod tests {
                 SubsExtendedRegister { width: W32, rd: 31, rn: 8, rm: 1, option: 0, amount: 0 },
             ),
             (0xfa1f01ad, Sbcs { width: W64, rd: 13, rn: 13, rm: 31 }),
+            (0xda1f0130, Sbc { width: W64, rd: 16, rn: 9, rm: 31 }),
             (0xba490962, CcmnImmediate { width: W64, rn: 11, imm: 9, nzcv: 2, condition: 0 }),
             (
                 0xf85f016e,
