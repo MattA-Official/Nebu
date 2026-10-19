@@ -1,6 +1,6 @@
 # 0012. Instructions for capabilities
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-19
 
 ## Context

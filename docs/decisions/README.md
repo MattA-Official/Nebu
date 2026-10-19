@@ -25,4 +25,4 @@ works live here.
 | 0009 | [The MMU](0009-the-mmu.md) | Accepted |
 | 0010 | [EL0 and system calls](0010-el0-and-system-calls.md) | Accepted |
 | 0011 | [The firmware mailbox](0011-the-firmware-mailbox.md) | Accepted |
-| 0012 | [Instructions for capabilities](0012-instructions-for-capabilities.md) | Proposed |
+| 0012 | [Instructions for capabilities](0012-instructions-for-capabilities.md) | Accepted |
