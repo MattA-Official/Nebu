@@ -121,6 +121,7 @@ struct SystemRegisters {
     cntvoff_el2: u64,
     spsr_el2: u64,
     elr_el2: u64,
+    cpacr_el1: u64,
 }
 
 /// HCR_EL2.RW: EL1 runs AArch64.
@@ -132,6 +133,7 @@ const SCTLR_EL1_MODELLED: u64 = 0x30d0_0800 | 1 << 12 | 1 << 4 | 1 << 3 | 1 << 2
 
 /// Exception classes, the top 6 bits of ESR_ELx.
 const EC_UNKNOWN: u64 = 0x00;
+const EC_SVC: u64 = 0x15;
 const EC_INSTRUCTION_ABORT_LOWER_EL: u64 = 0x20;
 const EC_INSTRUCTION_ABORT_SAME_EL: u64 = 0x21;
 const EC_DATA_ABORT_LOWER_EL: u64 = 0x24;
@@ -296,7 +298,7 @@ impl Cpu {
         use SystemRegister::*;
         match register {
             MpidrEl1 | CurrentEl | SctlrEl1 | SpsrEl1 | ElrEl1 | SpEl0 | EsrEl1 | FarEl1
-            | VbarEl1 | TcrEl1 | MairEl1 | Ttbr0El1 | Ttbr1El1 => 1,
+            | VbarEl1 | TcrEl1 | MairEl1 | Ttbr0El1 | Ttbr1El1 | CpacrEl1 => 1,
             HcrEl2 | CnthctlEl2 | CntvoffEl2 | SpsrEl2 | ElrEl2 | SpEl1 => 2,
         }
     }
@@ -327,6 +329,7 @@ impl Cpu {
             SpsrEl2 => self.sys.spsr_el2,
             ElrEl2 => self.sys.elr_el2,
             SpEl1 => self.sp_el[1],
+            CpacrEl1 => self.sys.cpacr_el1,
         })
     }
 
@@ -371,6 +374,15 @@ impl Cpu {
             SpsrEl2 => self.sys.spsr_el2 = value,
             ElrEl2 => self.sys.elr_el2 = value,
             SpEl1 => self.sp_el[1] = value,
+            // Nebu has no floating-point or SIMD instructions, so they halt it
+            // whatever FPEN (bits 21 and 20) says. Only FPEN = 0b00, which makes them
+            // trap, matches that.
+            CpacrEl1 => {
+                if value != 0 {
+                    return Err(Fault::Unsupported("CPACR_EL1 values that allow FP or SIMD"));
+                }
+                self.sys.cpacr_el1 = value;
+            }
         }
         Ok(())
     }
@@ -637,6 +649,10 @@ impl Cpu {
                 let source = if self.condition_holds(condition) { rn } else { rm };
                 self.write(rd, width, self.read(source, width));
             }
+            Madd { width, rd, rn, rm, ra } => {
+                let product = self.read(rn, width).wrapping_mul(self.read(rm, width));
+                self.write(rd, width, self.read(ra, width).wrapping_add(product));
+            }
             Csinc { width, rd, rn, rm, condition } => {
                 let value = if self.condition_holds(condition) {
                     self.read(rn, width)
@@ -659,6 +675,13 @@ impl Cpu {
             AddShiftedRegister { width, rd, rn, rm, shift, amount } => {
                 let operand2 = shift_register(self.read(rm, width), shift, amount, width);
                 self.write(rd, width, self.read(rn, width).wrapping_add(operand2));
+            }
+            AddsShiftedRegister { width, rd, rn, rm, shift, amount } => {
+                let operand1 = self.read(rn, width);
+                let operand2 = shift_register(self.read(rm, width), shift, amount, width);
+                let (value, flags) = add_with_carry(operand1, operand2, false, width);
+                self.write(rd, width, value);
+                self.flags = flags;
             }
             SubsShiftedRegister { width, rd, rn, rm, shift, amount } => {
                 let operand1 = self.read(rn, width);
@@ -711,6 +734,10 @@ impl Cpu {
             }
             Brk { imm16 } => next = self.take_exception(EC_BRK, u64::from(imm16), pc)?,
             Udf { .. } => next = self.take_exception(EC_UNKNOWN, 0, pc)?,
+            // A system call returns to the instruction after it.
+            Svc { imm16 } => {
+                next = self.take_exception(EC_SVC, u64::from(imm16), pc.wrapping_add(4))?
+            }
             Eret => next = self.exception_return()?,
             // No pipeline, caches or TLB are modelled, so a barrier has nothing to wait
             // for and there is nothing to invalidate.
@@ -1057,6 +1084,23 @@ mod tests {
         cpu.step(&mut bus, false).unwrap();
         assert_eq!((cpu.el, cpu.spsel, cpu.pc, cpu.daif), (0, false, 0x1234, 0));
         assert_eq!(cpu.flags, Flags { n: false, z: true, c: true, v: false });
+    }
+
+    #[test]
+    fn svc_from_el0_goes_to_the_lower_el_vector() {
+        let mut bus = Bus::new(uart());
+        bus.load(0x80000, &0xd4000021u32.to_le_bytes()).unwrap(); // svc #1
+        let mut cpu = Cpu::new(0x80000, false);
+        cpu.el = 0;
+        cpu.spsel = false;
+        cpu.daif = 0b1111;
+        cpu.sys.vbar_el1 = 0x1000;
+        cpu.step(&mut bus, false).unwrap();
+        // EC 0x15 with IL and the immediate; it returns to the next instruction.
+        assert_eq!(cpu.sys.esr_el1, 0x5600_0001);
+        assert_eq!(cpu.sys.elr_el1, 0x80004);
+        assert_eq!(cpu.sys.spsr_el1, 0x3c0 | 1 << 30); // EL0t, masked, Z set
+        assert_eq!((cpu.el, cpu.spsel, cpu.pc), (1, true, 0x1400));
     }
 
     #[test]

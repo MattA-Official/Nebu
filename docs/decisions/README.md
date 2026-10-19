@@ -21,5 +21,6 @@ works live here.
 | 0005 | [Licence](0005-licence.md)                                       | Accepted |
 | 0006 | [Machine model](0006-machine-model.md)                           | Accepted; amended by 0007, 0008 and 0009 |
 | 0007 | [Serial input and GPIO](0007-serial-input-and-gpio.md)           | Accepted |
-| 0008 | [Exception levels and exceptions](0008-exception-levels-and-exceptions.md) | Accepted; amended by 0009 |
+| 0008 | [Exception levels and exceptions](0008-exception-levels-and-exceptions.md) | Accepted; amended by 0009 and 0010 |
 | 0009 | [The MMU](0009-the-mmu.md) | Accepted |
+| 0010 | [EL0 and system calls](0010-el0-and-system-calls.md) | Proposed |

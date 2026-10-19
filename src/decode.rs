@@ -127,6 +127,9 @@ pub enum SystemRegister {
     Ttbr0El1,
     /// The base address of the page tables for the upper half of the address space.
     Ttbr1El1,
+    /// The architectural feature access control register: whether floating-point
+    /// and SIMD instructions trap.
+    CpacrEl1,
 }
 
 impl SystemRegister {
@@ -152,6 +155,7 @@ impl SystemRegister {
             (3, 0, 10, 2, 0) => SystemRegister::MairEl1,
             (3, 0, 2, 0, 0) => SystemRegister::Ttbr0El1,
             (3, 0, 2, 0, 1) => SystemRegister::Ttbr1El1,
+            (3, 0, 1, 0, 2) => SystemRegister::CpacrEl1,
             _ => return None,
         })
     }
@@ -178,6 +182,7 @@ impl SystemRegister {
             SystemRegister::MairEl1 => "MAIR_EL1",
             SystemRegister::Ttbr0El1 => "TTBR0_EL1",
             SystemRegister::Ttbr1El1 => "TTBR1_EL1",
+            SystemRegister::CpacrEl1 => "CPACR_EL1",
         }
     }
 }
@@ -228,6 +233,9 @@ pub enum Instruction {
     Ubfm { width: Width, rd: u8, rn: u8, immr: u8, imms: u8 },
     /// ADD (shifted register): `rd = rn + (rm shifted)`. 31 is the zero register.
     AddShiftedRegister { width: Width, rd: u8, rn: u8, rm: u8, shift: Shift, amount: u8 },
+    /// ADDS (shifted register): `rd = rn + (rm shifted)`, setting the flags.
+    /// 31 is the zero register.
+    AddsShiftedRegister { width: Width, rd: u8, rn: u8, rm: u8, shift: Shift, amount: u8 },
     /// SUB (shifted register): `rd = rn - (rm shifted)`. 31 is the zero register.
     SubShiftedRegister { width: Width, rd: u8, rn: u8, rm: u8, shift: Shift, amount: u8 },
     /// SUBS (shifted register): `rd = rn - (rm shifted)`, setting the flags.
@@ -249,6 +257,8 @@ pub enum Instruction {
     ShiftVariable { width: Width, rd: u8, rn: u8, rm: u8, shift: Shift },
     /// CSEL: `rd = if condition holds { rn } else { rm }`. 31 is the zero register.
     Csel { width: Width, rd: u8, rn: u8, rm: u8, condition: u8 },
+    /// MADD: `rd = ra + rn * rm`, keeping the low bits. 31 is the zero register.
+    Madd { width: Width, rd: u8, rn: u8, rm: u8, ra: u8 },
     /// CSINC: `rd = if condition holds { rn } else { rm + 1 }`. 31 is the zero register.
     Csinc { width: Width, rd: u8, rn: u8, rm: u8, condition: u8 },
     /// CCMP (register): if `condition` holds, set the flags as `cmp rn, rm` would;
@@ -282,6 +292,9 @@ pub enum Instruction {
     Hlt { imm16: u16 },
     /// BRK: take a Breakpoint Instruction exception.
     Brk { imm16: u16 },
+    /// SVC: a system call. Takes a synchronous exception to EL1 with `imm16` in
+    /// ESR_EL1, which returns to the next instruction.
+    Svc { imm16: u16 },
     /// UDF: a permanently undefined instruction, which takes an Undefined Instruction
     /// exception.
     Udf { imm16: u16 },
@@ -594,6 +607,7 @@ fn branches_exceptions_system(word: u32) -> Result<Instruction, DecodeError> {
         match (opc, op2, ll) {
             (0b010, 0b000, 0b00) => return Ok(Instruction::Hlt { imm16 }),
             (0b001, 0b000, 0b00) => return Ok(Instruction::Brk { imm16 }),
+            (0b000, 0b000, 0b01) => return Ok(Instruction::Svc { imm16 }),
             _ => {}
         }
         return Err(DecodeError::Unimplemented);
@@ -708,13 +722,21 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
             (0b01, _, _) => (Index::Offset, i64::from(bits(word, 21, 10)) * scale),
             // Unscaled immediate offset.
             (0b00, 0, 0b00) => {
+                let offset = sign_extend(bits(word, 20, 12), 9);
                 return match (size, opc) {
                     (0b10 | 0b11, 0b00) => {
                         let width = Width::from_bit(size & 1);
-                        let offset = sign_extend(bits(word, 20, 12), 9);
                         Ok(Instruction::Stur { width, rt, rn, offset })
                     }
-                    _ => Err(DecodeError::Unimplemented), // LDUR and narrower STUR forms
+                    // STURB and LDURB do what STRB and LDRB with an offset do, so they
+                    // share their variants. Only the encoding of the offset differs.
+                    (0b00, 0b00) => {
+                        Ok(Instruction::StrbImmediate { rt, rn, index: Index::Offset, offset })
+                    }
+                    (0b00, 0b01) => {
+                        Ok(Instruction::LdrbImmediate { rt, rn, index: Index::Offset, offset })
+                    }
+                    _ => Err(DecodeError::Unimplemented), // LDUR and STURH, LDURH
                 };
             }
             (0b00, 0, 0b01) => (Index::Post, sign_extend(bits(word, 20, 12), 9)),
@@ -772,6 +794,21 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
 }
 
 fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
+    // Data-processing (3 source). Only MADD (op54 = 00, op31 = 000, o0 = 0).
+    if bits(word, 28, 24) == 0b11011 {
+        let width = Width::from_bit(bits(word, 31, 31));
+        return match (bits(word, 30, 29), bits(word, 23, 21), bits(word, 15, 15)) {
+            (0b00, 0b000, 0) => Ok(Instruction::Madd {
+                width,
+                rd: reg(word, 0),
+                rn: reg(word, 5),
+                rm: reg(word, 16),
+                ra: reg(word, 10),
+            }),
+            _ => Err(DecodeError::Unimplemented),
+        };
+    }
+
     // Logical (shifted register).
     if bits(word, 28, 24) == 0b01010 {
         let width = Width::from_bit(bits(word, 31, 31));
@@ -812,9 +849,9 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
         let (rd, rn, rm, amount) = (reg(word, 0), reg(word, 5), reg(word, 16), amount as u8);
         return match bits(word, 30, 29) {
             0b00 => Ok(Instruction::AddShiftedRegister { width, rd, rn, rm, shift, amount }),
+            0b01 => Ok(Instruction::AddsShiftedRegister { width, rd, rn, rm, shift, amount }),
             0b10 => Ok(Instruction::SubShiftedRegister { width, rd, rn, rm, shift, amount }),
-            0b11 => Ok(Instruction::SubsShiftedRegister { width, rd, rn, rm, shift, amount }),
-            _ => Err(DecodeError::Unimplemented), // ADDS
+            _ => Ok(Instruction::SubsShiftedRegister { width, rd, rn, rm, shift, amount }),
         };
     }
 
@@ -1048,6 +1085,9 @@ impl fmt::Display for Instruction {
                 zr(rm, width),
                 shift_name(shift)
             ),
+            AddsShiftedRegister { width, rd, rn, rm, shift, amount } => {
+                ShiftedRegister { name: "adds", width, rd, rn, rm, shift, amount }.fmt(f)
+            }
             SubShiftedRegister { width, rd, rn, rm, shift, amount } => {
                 ShiftedRegister { name: "sub", width, rd, rn, rm, shift, amount }.fmt(f)
             }
@@ -1089,6 +1129,14 @@ impl fmt::Display for Instruction {
                 zr(rn, width),
                 zr(rm, width),
                 CONDITIONS[usize::from(condition)]
+            ),
+            Madd { width, rd, rn, rm, ra } => write!(
+                f,
+                "madd {}, {}, {}, {}",
+                zr(rd, width),
+                zr(rn, width),
+                zr(rm, width),
+                zr(ra, width)
             ),
             Csinc { width, rd, rn, rm, condition } => write!(
                 f,
@@ -1133,6 +1181,7 @@ impl fmt::Display for Instruction {
             }
             Hlt { imm16 } => write!(f, "hlt #{imm16:#x}"),
             Brk { imm16 } => write!(f, "brk #{imm16:#x}"),
+            Svc { imm16 } => write!(f, "svc #{imm16:#x}"),
             Udf { imm16 } => write!(f, "udf #{imm16:#x}"),
             Eret => write!(f, "eret"),
             Nop => write!(f, "nop"),
@@ -1370,6 +1419,8 @@ mod tests {
             (0xd5386003, Mrs { rt: 3, register: SystemRegister::FarEl1 }),
             (0xd69f03e0, Eret),
             (0xd4200000, Brk { imm16: 0 }),
+            (0xd4000001, Svc { imm16: 0 }),
+            (0xd518105f, Msr { register: SystemRegister::CpacrEl1, rt: 31 }),
             (0x00000000, Udf { imm16: 0 }),
             (0xb2400421, OrrImmediate { width: W64, rd: 1, rn: 1, imm: 0b11 }),
             (0xb5001f49, Cbnz { width: W64, rt: 9, offset: 0x3e8 }),
@@ -1383,6 +1434,21 @@ mod tests {
             (0x520004a5, EorImmediate { width: W32, rd: 5, rn: 5, imm: 3 }),
             (0xf24006bf, AndsImmediate { width: W64, rd: 31, rn: 21, imm: 3 }),
             (0x9a9f0604, Csinc { width: W64, rd: 4, rn: 16, rm: 31, condition: 0 }),
+            (
+                0xab0c03a8,
+                AddsShiftedRegister {
+                    width: W64,
+                    rd: 8,
+                    rn: 29,
+                    rm: 12,
+                    shift: Shift::Lsl,
+                    amount: 0,
+                },
+            ),
+            (0x9b081f88, Madd { width: W64, rd: 8, rn: 28, rm: 8, ra: 7 }),
+            (0x1b037c41, Madd { width: W32, rd: 1, rn: 2, rm: 3, ra: 31 }),
+            (0x385ff020, LdrbImmediate { rt: 0, rn: 1, index: Index::Offset, offset: -1 }),
+            (0x381ff020, StrbImmediate { rt: 0, rn: 1, index: Index::Offset, offset: -1 }),
             (0x7a572060, CcmpRegister { width: W32, rn: 3, rm: 23, nzcv: 0, condition: 2 }),
             (0xfa4008a4, CcmpImmediate { width: W64, rn: 5, imm: 0, nzcv: 4, condition: 0 }),
             (
