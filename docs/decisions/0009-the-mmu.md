@@ -1,6 +1,6 @@
 # 0009. The MMU
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-19
 
 ## Context
