@@ -639,8 +639,16 @@ impl Cpu {
                 let operand2 = shift_register(self.read(rm, width), shift, amount, width);
                 self.write(rd, width, self.read(rn, width) ^ operand2);
             }
-            AndsShiftedRegister { width, rd, rn, rm, shift, amount } => {
+            BicShiftedRegister { width, rd, rn, rm, shift, amount } => {
                 let operand2 = shift_register(self.read(rm, width), shift, amount, width);
+                self.write(rd, width, self.read(rn, width) & !operand2);
+            }
+            AndsShiftedRegister { width, rd, rn, rm, shift, amount }
+            | BicsShiftedRegister { width, rd, rn, rm, shift, amount } => {
+                let mut operand2 = shift_register(self.read(rm, width), shift, amount, width);
+                if matches!(instruction, BicsShiftedRegister { .. }) {
+                    operand2 = !operand2 & width.mask();
+                }
                 let value = self.read(rn, width) & operand2;
                 self.write(rd, width, value);
                 let top = width.bits() - 1;
@@ -659,6 +667,11 @@ impl Cpu {
                 let product = self.read(rn, width).wrapping_mul(self.read(rm, width));
                 self.write(rd, width, self.read(ra, width).wrapping_add(product));
             }
+            Umulh { rd, rn, rm } => {
+                let product =
+                    u128::from(self.read(rn, Width::W64)) * u128::from(self.read(rm, Width::W64));
+                self.write(rd, Width::W64, (product >> 64) as u64);
+            }
             Msub { width, rd, rn, rm, ra } => {
                 let product = self.read(rn, width).wrapping_mul(self.read(rm, width));
                 self.write(rd, width, self.read(ra, width).wrapping_sub(product));
@@ -671,12 +684,23 @@ impl Cpu {
                 };
                 self.write(rd, width, value);
             }
+            Csinv { width, rd, rn, rm, condition } => {
+                let value = if self.condition_holds(condition) {
+                    self.read(rn, width)
+                } else {
+                    !self.read(rm, width) & width.mask()
+                };
+                self.write(rd, width, value);
+            }
             CcmpRegister { width, rn, rm, nzcv, condition } => {
                 let operand2 = self.read(rm, width);
                 self.conditional_compare(width, rn, operand2, nzcv, condition);
             }
             CcmpImmediate { width, rn, imm, nzcv, condition } => {
                 self.conditional_compare(width, rn, u64::from(imm), nzcv, condition);
+            }
+            CcmnImmediate { width, rn, imm, nzcv, condition } => {
+                self.conditional_compare_negative(width, rn, u64::from(imm), nzcv, condition);
             }
             SubShiftedRegister { width, rd, rn, rm, shift, amount } => {
                 let operand2 = shift_register(self.read(rm, width), shift, amount, width);
@@ -690,6 +714,48 @@ impl Cpu {
                 let operand1 = self.read(rn, width);
                 let operand2 = shift_register(self.read(rm, width), shift, amount, width);
                 let (value, flags) = add_with_carry(operand1, operand2, false, width);
+                self.write(rd, width, value);
+                self.flags = flags;
+            }
+            Rbit { width, rd, rn } => {
+                let value = self.read(rn, width).reverse_bits() >> (64 - width.bits());
+                self.write(rd, width, value);
+            }
+            Clz { width, rd, rn } => {
+                let value = self.read(rn, width).leading_zeros() - (64 - width.bits());
+                self.write(rd, width, u64::from(value));
+            }
+            Extr { width, rd, rn, rm, lsb } => {
+                let (high, low) = (self.read(rn, width), self.read(rm, width));
+                let value = if lsb == 0 {
+                    low
+                } else {
+                    low >> lsb | high << (width.bits() - u32::from(lsb))
+                };
+                self.write(rd, width, value);
+            }
+            SubsExtendedRegister { width, rd, rn, rm, option, amount } => {
+                let value = self.read(rm, Width::W64);
+                // UXTB, UXTH, UXTW and UXTX keep the low 8, 16, 32 or 64 bits; the
+                // SXT forms sign-extend them.
+                let bits = 8u32 << (option & 0b11);
+                let extended = if bits == 64 {
+                    value
+                } else if option & 0b100 == 0 {
+                    value & ((1 << bits) - 1)
+                } else {
+                    ((value << (64 - bits)) as i64 >> (64 - bits)) as u64
+                };
+                let operand2 = (extended << amount) & width.mask();
+                let (value, flags) =
+                    add_with_carry(self.read_sp(rn, width), !operand2 & width.mask(), true, width);
+                self.write(rd, width, value);
+                self.flags = flags;
+            }
+            Sbcs { width, rd, rn, rm } => {
+                let operand2 = !self.read(rm, width) & width.mask();
+                let (value, flags) =
+                    add_with_carry(self.read(rn, width), operand2, self.flags.c, width);
                 self.write(rd, width, value);
                 self.flags = flags;
             }
@@ -877,13 +943,34 @@ impl Cpu {
         self.flags = if self.condition_holds(condition) {
             add_with_carry(self.read(rn, width), !operand2 & width.mask(), true, width).1
         } else {
-            Flags {
-                n: nzcv & 0b1000 != 0,
-                z: nzcv & 0b0100 != 0,
-                c: nzcv & 0b0010 != 0,
-                v: nzcv & 0b0001 != 0,
-            }
+            Self::nzcv_flags(nzcv)
         };
+    }
+
+    /// CCMN: like [`Self::conditional_compare`], but comparing with `-operand2`.
+    fn conditional_compare_negative(
+        &mut self,
+        width: Width,
+        rn: u8,
+        operand2: u64,
+        nzcv: u8,
+        condition: u8,
+    ) {
+        self.flags = if self.condition_holds(condition) {
+            add_with_carry(self.read(rn, width), operand2, false, width).1
+        } else {
+            Self::nzcv_flags(nzcv)
+        };
+    }
+
+    /// The flags an `nzcv` field names.
+    fn nzcv_flags(nzcv: u8) -> Flags {
+        Flags {
+            n: nzcv & 0b1000 != 0,
+            z: nzcv & 0b0100 != 0,
+            c: nzcv & 0b0010 != 0,
+            v: nzcv & 0b0001 != 0,
+        }
     }
 
     /// The architecture's `ExtendReg` for a register offset, before any shift.
