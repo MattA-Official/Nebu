@@ -1,6 +1,6 @@
 # 0008. Exception levels and exceptions
 
-- **Status:** Accepted
+- **Status:** Accepted; the MMU and aborts added by [0009](0009-the-mmu.md)
 - **Date:** 2026-10-19
 
 ## Context

@@ -19,6 +19,7 @@ works live here.
 | 0003 | [Toolchain](0003-toolchain.md)                                   | Accepted |
 | 0004 | [Execution model: an interpreter](0004-execution-model.md)      | Accepted |
 | 0005 | [Licence](0005-licence.md)                                       | Accepted |
-| 0006 | [Machine model](0006-machine-model.md)                           | Accepted; amended by 0007 and 0008 |
+| 0006 | [Machine model](0006-machine-model.md)                           | Accepted; amended by 0007, 0008 and 0009 |
 | 0007 | [Serial input and GPIO](0007-serial-input-and-gpio.md)           | Accepted |
-| 0008 | [Exception levels and exceptions](0008-exception-levels-and-exceptions.md) | Accepted |
+| 0008 | [Exception levels and exceptions](0008-exception-levels-and-exceptions.md) | Accepted; amended by 0009 |
+| 0009 | [The MMU](0009-the-mmu.md) | Accepted |

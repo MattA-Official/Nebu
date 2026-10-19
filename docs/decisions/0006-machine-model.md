@@ -1,6 +1,6 @@
 # 0006. Machine model
 
-- **Status:** Accepted; points 3 and 5 amended by [0007](0007-serial-input-and-gpio.md); exceptions added by [0008](0008-exception-levels-and-exceptions.md)
+- **Status:** Accepted; points 3 and 5 amended by [0007](0007-serial-input-and-gpio.md); exceptions added by [0008](0008-exception-levels-and-exceptions.md); the MMU added by [0009](0009-the-mmu.md)
 - **Date:** 2026-10-15
 
 ## Context

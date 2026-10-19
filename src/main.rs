@@ -9,6 +9,7 @@ mod bus;
 mod cpu;
 mod decode;
 mod gpio;
+mod mmu;
 mod pl011;
 
 use std::io::Read;
