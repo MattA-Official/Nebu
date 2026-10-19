@@ -1179,6 +1179,13 @@ mod tests {
             assert_eq!(cpu.x[16], expected);
             assert_eq!(cpu.flags, Flags { n: true, z: false, c: carry, v: false });
         }
+        // sbc w0, w1, w2: 32 bits wrap, and the upper half is cleared.
+        let mut bus = Bus::new(uart());
+        bus.load(0x80000, &0x5a020020u32.to_le_bytes()).unwrap();
+        let mut cpu = Cpu::new(0x80000, false);
+        (cpu.x[1], cpu.x[2]) = (0xFFFF_FFFF_0000_0001, 3);
+        cpu.step(&mut bus, false).unwrap();
+        assert_eq!(cpu.x[0], 0xFFFF_FFFD);
     }
 
     #[test]
