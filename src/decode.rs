@@ -130,6 +130,8 @@ pub enum SystemRegister {
     /// The architectural feature access control register: whether floating-point
     /// and SIMD instructions trap.
     CpacrEl1,
+    /// The cache type register: among other things, the size of a cache line.
+    CtrEl0,
 }
 
 impl SystemRegister {
@@ -156,6 +158,7 @@ impl SystemRegister {
             (3, 0, 2, 0, 0) => SystemRegister::Ttbr0El1,
             (3, 0, 2, 0, 1) => SystemRegister::Ttbr1El1,
             (3, 0, 1, 0, 2) => SystemRegister::CpacrEl1,
+            (3, 3, 0, 0, 1) => SystemRegister::CtrEl0,
             _ => return None,
         })
     }
@@ -183,6 +186,7 @@ impl SystemRegister {
             SystemRegister::Ttbr0El1 => "TTBR0_EL1",
             SystemRegister::Ttbr1El1 => "TTBR1_EL1",
             SystemRegister::CpacrEl1 => "CPACR_EL1",
+            SystemRegister::CtrEl0 => "CTR_EL0",
         }
     }
 }
@@ -259,6 +263,8 @@ pub enum Instruction {
     Csel { width: Width, rd: u8, rn: u8, rm: u8, condition: u8 },
     /// MADD: `rd = ra + rn * rm`, keeping the low bits. 31 is the zero register.
     Madd { width: Width, rd: u8, rn: u8, rm: u8, ra: u8 },
+    /// MSUB: `rd = ra - rn * rm`, keeping the low bits. 31 is the zero register.
+    Msub { width: Width, rd: u8, rn: u8, rm: u8, ra: u8 },
     /// CSINC: `rd = if condition holds { rn } else { rm + 1 }`. 31 is the zero register.
     Csinc { width: Width, rd: u8, rn: u8, rm: u8, condition: u8 },
     /// CCMP (register): if `condition` holds, set the flags as `cmp rn, rm` would;
@@ -312,6 +318,9 @@ pub enum Instruction {
     Dsb { option: u8 },
     /// IC IALLU: invalidate the whole instruction cache.
     IcIallu,
+    /// DC CIVAC: clean and invalidate the data cache line holding the address in
+    /// `rt`, to the point of coherency.
+    DcCivac { rt: u8 },
     /// TLBI VMALLE1: invalidate every cached EL1&0 translation.
     TlbiVmalle1,
     /// MRS: read a system register into `rt`. 31 is the zero register.
@@ -649,6 +658,7 @@ fn system(word: u32) -> Result<Instruction, DecodeError> {
         (0, 1, _, _) => match (op1, crn, crm, op2, rt) {
             (0, 7, 5, 0, 31) => Ok(Instruction::IcIallu),
             (0, 8, 7, 0, 31) => Ok(Instruction::TlbiVmalle1),
+            (3, 7, 14, 1, rt) => Ok(Instruction::DcCivac { rt }),
             _ => Err(DecodeError::Unimplemented),
         },
         // MRS and MSR (register).
@@ -794,11 +804,18 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
 }
 
 fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
-    // Data-processing (3 source). Only MADD (op54 = 00, op31 = 000, o0 = 0).
+    // Data-processing (3 source). Only MADD and MSUB (op54 = 00, op31 = 000).
     if bits(word, 28, 24) == 0b11011 {
         let width = Width::from_bit(bits(word, 31, 31));
         return match (bits(word, 30, 29), bits(word, 23, 21), bits(word, 15, 15)) {
             (0b00, 0b000, 0) => Ok(Instruction::Madd {
+                width,
+                rd: reg(word, 0),
+                rn: reg(word, 5),
+                rm: reg(word, 16),
+                ra: reg(word, 10),
+            }),
+            (0b00, 0b000, 1) => Ok(Instruction::Msub {
                 width,
                 rd: reg(word, 0),
                 rn: reg(word, 5),
@@ -1138,6 +1155,14 @@ impl fmt::Display for Instruction {
                 zr(rm, width),
                 zr(ra, width)
             ),
+            Msub { width, rd, rn, rm, ra } => write!(
+                f,
+                "msub {}, {}, {}, {}",
+                zr(rd, width),
+                zr(rn, width),
+                zr(rm, width),
+                zr(ra, width)
+            ),
             Csinc { width, rd, rn, rm, condition } => write!(
                 f,
                 "csinc {}, {}, {}, {}",
@@ -1192,6 +1217,7 @@ impl fmt::Display for Instruction {
                 name => write!(f, "dsb {name}"),
             },
             IcIallu => write!(f, "ic iallu"),
+            DcCivac { rt } => write!(f, "dc civac, {}", zr(rt, Width::W64)),
             TlbiVmalle1 => write!(f, "tlbi vmalle1"),
             Mrs { rt, register } => write!(f, "mrs {}, {}", zr(rt, Width::W64), register.name()),
             Msr { register, rt } => write!(f, "msr {}, {}", register.name(), zr(rt, Width::W64)),
@@ -1422,6 +1448,9 @@ mod tests {
             (0xd4000001, Svc { imm16: 0 }),
             (0xd518105f, Msr { register: SystemRegister::CpacrEl1, rt: 31 }),
             (0x00000000, Udf { imm16: 0 }),
+            // Stage 4: asking the firmware about memory.
+            (0xd53b0028, Mrs { rt: 8, register: SystemRegister::CtrEl0 }),
+            (0xd50b7e28, DcCivac { rt: 8 }),
             (0xb2400421, OrrImmediate { width: W64, rd: 1, rn: 1, imm: 0b11 }),
             (0xb5001f49, Cbnz { width: W64, rt: 9, offset: 0x3e8 }),
             (0x1a8b310a, Csel { width: W32, rd: 10, rn: 8, rm: 11, condition: 0b0011 }),
@@ -1447,6 +1476,7 @@ mod tests {
             ),
             (0x9b081f88, Madd { width: W64, rd: 8, rn: 28, rm: 8, ra: 7 }),
             (0x1b037c41, Madd { width: W32, rd: 1, rn: 2, rm: 3, ra: 31 }),
+            (0x1b09d108, Msub { width: W32, rd: 8, rn: 8, rm: 9, ra: 20 }),
             (0x385ff020, LdrbImmediate { rt: 0, rn: 1, index: Index::Offset, offset: -1 }),
             (0x381ff020, StrbImmediate { rt: 0, rn: 1, index: Index::Offset, offset: -1 }),
             (0x7a572060, CcmpRegister { width: W32, rn: 3, rm: 23, nzcv: 0, condition: 2 }),
@@ -1515,6 +1545,7 @@ mod tests {
         assert_eq!(decode(0x9aca216a).unwrap().to_string(), "lslv x10, x11, x10");
         assert_eq!(decode(0xf86a698a).unwrap().to_string(), "ldr x10, [x12, x10, lsl #0]");
         assert_eq!(decode(0xd508871f).unwrap().to_string(), "tlbi vmalle1");
+        assert_eq!(decode(0xd50b7e28).unwrap().to_string(), "dc civac, x8");
         assert_eq!(decode(0x7a572060).unwrap().to_string(), "ccmp w3, w23, #0x0, hs");
         assert_eq!(decode(0xfa4008a4).unwrap().to_string(), "ccmp x5, #0x0, #0x4, eq");
         assert_eq!(decode(0xb829690a).unwrap().to_string(), "str w10, [x8, x9, lsl #0]");

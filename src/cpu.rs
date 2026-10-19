@@ -130,6 +130,9 @@ const HCR_EL2_RW: u64 = 1 << 31;
 /// SA and SA0 (stack alignment checks) and I (the instruction cache). Nebu has no
 /// caches, and halts on any misaligned SP-based access whether or not SA is set.
 const SCTLR_EL1_MODELLED: u64 = 0x30d0_0800 | 1 << 12 | 1 << 4 | 1 << 3 | 1 << 2 | SCTLR_M;
+/// The Cortex-A53's cache type register, as QEMU gives it: 64-byte cache lines, and
+/// an instruction cache indexed and tagged by physical address.
+const CTR_EL0: u64 = 0x8444_8004;
 
 /// Exception classes, the top 6 bits of ESR_ELx.
 const EC_UNKNOWN: u64 = 0x00;
@@ -299,6 +302,8 @@ impl Cpu {
         match register {
             MpidrEl1 | CurrentEl | SctlrEl1 | SpsrEl1 | ElrEl1 | SpEl0 | EsrEl1 | FarEl1
             | VbarEl1 | TcrEl1 | MairEl1 | Ttbr0El1 | Ttbr1El1 | CpacrEl1 => 1,
+            // EL0 can read it only when SCTLR_EL1.UCT is set, which Nebu does not allow.
+            CtrEl0 => 1,
             HcrEl2 | CnthctlEl2 | CntvoffEl2 | SpsrEl2 | ElrEl2 | SpEl1 => 2,
         }
     }
@@ -330,6 +335,7 @@ impl Cpu {
             ElrEl2 => self.sys.elr_el2,
             SpEl1 => self.sp_el[1],
             CpacrEl1 => self.sys.cpacr_el1,
+            CtrEl0 => CTR_EL0,
         })
     }
 
@@ -340,7 +346,7 @@ impl Cpu {
         }
         use SystemRegister::*;
         match register {
-            MpidrEl1 | CurrentEl | EsrEl1 | FarEl1 => {
+            MpidrEl1 | CurrentEl | EsrEl1 | FarEl1 | CtrEl0 => {
                 // Writable on hardware in the case of ESR and FAR, but nothing should.
                 return Err(Fault::SystemRegisterAccess { register, el: self.el, write: true });
             }
@@ -653,6 +659,10 @@ impl Cpu {
                 let product = self.read(rn, width).wrapping_mul(self.read(rm, width));
                 self.write(rd, width, self.read(ra, width).wrapping_add(product));
             }
+            Msub { width, rd, rn, rm, ra } => {
+                let product = self.read(rn, width).wrapping_mul(self.read(rm, width));
+                self.write(rd, width, self.read(ra, width).wrapping_sub(product));
+            }
             Csinc { width, rd, rn, rm, condition } => {
                 let value = if self.condition_holds(condition) {
                     self.read(rn, width)
@@ -742,6 +752,14 @@ impl Cpu {
             // No pipeline, caches or TLB are modelled, so a barrier has nothing to wait
             // for and there is nothing to invalidate.
             Nop | Isb | Dsb { .. } | IcIallu | TlbiVmalle1 => {}
+            // Nor are data caches, so there is nothing to clean, but the address must
+            // still translate, as on hardware.
+            DcCivac { rt } => {
+                if self.el == 0 {
+                    return Err(Fault::Unsupported("cache maintenance at EL0").into());
+                }
+                self.translate(bus, self.read(rt, Width::W64), Access::Read)?;
+            }
             Wfe => {
                 if self.event {
                     self.event = false;
