@@ -12,6 +12,7 @@ all addressing modes.
 | Instruction                  | Needed by                    |
 |------------------------------|------------------------------|
 | ADD (immediate)              | NeOS step 2: boot            |
+| ADD (extended register)      | NeOS stage 5a: threads       |
 | ADD (shifted register)       | NeOS step 2: panic path      |
 | ADDS (immediate)             | NeOS step 3: chainloader     |
 | ADDS (shifted register)      | NeOS stage 3: loading the root task |
@@ -54,8 +55,10 @@ all addressing modes.
 | LDR (register)               | NeOS stage 1: fault reports  |
 | LDRB (immediate)             | NeOS step 2: panic path      |
 | LDRB (register)              | NeOS step 2: panic path      |
+| LDRH (immediate)             | NeOS stage 5a: ASIDs         |
 | LDUR                         | NeOS stage 4: reading the boot info |
 | LDURB                        | NeOS stage 3: loading the root task |
+| LDURH                        | NeOS stage 5a: ASIDs         |
 | LSLV                         | NeOS stage 1: fault reports  |
 | LSRV                         | NeOS stage 1: fault reports  |
 | MADD                         | NeOS stage 3: loading the root task |
@@ -81,6 +84,7 @@ all addressing modes.
 | STRH (immediate)             | NeOS step 2: panic path      |
 | STUR                         | NeOS step 2: boot            |
 | STURB                        | NeOS stage 3: loading the root task |
+| STURH                        | NeOS stage 5a: ASIDs         |
 | SUB (immediate)              | NeOS step 2: boot            |
 | SUB (shifted register)       | NeOS stage 2: MMU            |
 | SUBS (extended register)     | NeOS stage 4: capability test |
@@ -89,6 +93,7 @@ all addressing modes.
 | SVC                          | NeOS stage 3: system calls   |
 | TBNZ                         | NeOS step 2: boot            |
 | TBZ                          | NeOS step 2: boot            |
+| TLBI ASIDE1                  | NeOS stage 5a: deleting an address space |
 | TLBI VMALLE1                 | NeOS stage 2: switching page tables |
 | UBFM                         | NeOS step 3: CRC-32          |
 | UDF                          | NeOS stage 1: exceptions test |
@@ -104,8 +109,9 @@ CSINC, `mvn` is ORN, `neg` is SUB (shifted register), `mul` is MADD, `cmn` with 
 register is ADDS (shifted register), `ngc` and `ngcs` are SBC and SBCS, `ror` with an immediate is EXTR,
 `csetm` is CSINV, and `cmp` with an extended register is SUBS (extended register).
 LDURB and STURB run as LDRB and STRB with an unscaled offset
-([ADR 0010](decisions/0010-el0-and-system-calls.md)), and LDUR as LDR
-([ADR 0012](decisions/0012-instructions-for-capabilities.md)).
+([ADR 0010](decisions/0010-el0-and-system-calls.md)), LDUR as LDR
+([ADR 0012](decisions/0012-instructions-for-capabilities.md)), and LDURH and STURH
+as LDRH and STRH ([ADR 0014](decisions/0014-threads-and-address-spaces.md)).
 
 ## System registers
 
@@ -126,12 +132,14 @@ LDURB and STURB run as LDRB and STRB with an unscaled offset
 | SP_EL0      | Read/write |                                             | NeOS stage 1: exception vectors |
 | TCR_EL1     | Read/write | 39-bit addresses and 4 KiB pages only       | NeOS stage 2: MMU            |
 | MAIR_EL1    | Read/write | Device or Normal memory, from each attribute's top nibble | NeOS stage 2: MMU |
-| TTBR0_EL1, TTBR1_EL1 | Read/write | ASIDs are ignored                  | NeOS stage 2: MMU            |
+| TTBR0_EL1, TTBR1_EL1 | Read/write | ASIDs are ignored: there is no TLB | NeOS stage 2: MMU; stage 5a: ASIDs |
 | CPACR_EL1   | Read/write | Only 0 (FP and SIMD trap) may be written    | NeOS stage 3: trapping floating point |
 | CTR_EL0     | Read       | `0x8444_8004`: 64-byte cache lines; EL1 and above only | NeOS stage 4: cleaning the data cache |
+| TPIDR_EL0   | Read/write | From EL0 too                                | NeOS stage 5a: saving a thread's registers |
 
 Accessing a register from a lower EL than the table allows halts Nebu, because
 hardware would trap. EL1 registers need EL1 or above, and EL2 registers need EL2.
+TPIDR_EL0 is the one register EL0 may use.
 
 ## Exceptions
 

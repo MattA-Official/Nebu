@@ -122,6 +122,7 @@ struct SystemRegisters {
     spsr_el2: u64,
     elr_el2: u64,
     cpacr_el1: u64,
+    tpidr_el0: u64,
 }
 
 /// HCR_EL2.RW: EL1 runs AArch64.
@@ -304,6 +305,7 @@ impl Cpu {
             | VbarEl1 | TcrEl1 | MairEl1 | Ttbr0El1 | Ttbr1El1 | CpacrEl1 => 1,
             // EL0 can read it only when SCTLR_EL1.UCT is set, which Nebu does not allow.
             CtrEl0 => 1,
+            TpidrEl0 => 0,
             HcrEl2 | CnthctlEl2 | CntvoffEl2 | SpsrEl2 | ElrEl2 | SpEl1 => 2,
         }
     }
@@ -336,6 +338,7 @@ impl Cpu {
             SpEl1 => self.sp_el[1],
             CpacrEl1 => self.sys.cpacr_el1,
             CtrEl0 => CTR_EL0,
+            TpidrEl0 => self.sys.tpidr_el0,
         })
     }
 
@@ -366,6 +369,7 @@ impl Cpu {
             SpsrEl1 => self.sys.spsr_el1 = value,
             ElrEl1 => self.sys.elr_el1 = value,
             SpEl0 => self.sp_el[0] = value,
+            TpidrEl0 => self.sys.tpidr_el0 = value,
             // The low 11 bits are RES0: the table is 2 KiB-aligned.
             VbarEl1 => self.sys.vbar_el1 = value & !0x7FF,
             HcrEl2 => {
@@ -734,19 +738,13 @@ impl Cpu {
                 };
                 self.write(rd, width, value);
             }
+            AddExtendedRegister { width, rd, rn, rm, option, amount } => {
+                let operand2 = self.extended(rm, option, amount, width);
+                let value = self.read_sp(rn, width).wrapping_add(operand2) & width.mask();
+                self.write_sp(rd, width, value);
+            }
             SubsExtendedRegister { width, rd, rn, rm, option, amount } => {
-                let value = self.read(rm, Width::W64);
-                // UXTB, UXTH, UXTW and UXTX keep the low 8, 16, 32 or 64 bits; the
-                // SXT forms sign-extend them.
-                let bits = 8u32 << (option & 0b11);
-                let extended = if bits == 64 {
-                    value
-                } else if option & 0b100 == 0 {
-                    value & ((1 << bits) - 1)
-                } else {
-                    ((value << (64 - bits)) as i64 >> (64 - bits)) as u64
-                };
-                let operand2 = (extended << amount) & width.mask();
+                let operand2 = self.extended(rm, option, amount, width);
                 let (value, flags) =
                     add_with_carry(self.read_sp(rn, width), !operand2 & width.mask(), true, width);
                 self.write(rd, width, value);
@@ -823,7 +821,7 @@ impl Cpu {
             Eret => next = self.exception_return()?,
             // No pipeline, caches or TLB are modelled, so a barrier has nothing to wait
             // for and there is nothing to invalidate.
-            Nop | Isb | Dsb { .. } | IcIallu | TlbiVmalle1 => {}
+            Nop | Isb | Dsb { .. } | IcIallu | TlbiVmalle1 | TlbiAside1 { .. } => {}
             // Nor are data caches, so there is nothing to clean, but the address must
             // still translate, as on hardware.
             DcCivac { rt } => {
@@ -895,6 +893,14 @@ impl Cpu {
                 if let Some(base) = writeback {
                     self.write_sp(rn, Width::W64, base);
                 }
+            }
+            LdrhImmediate { rt, rn, index, offset } => {
+                let (address, writeback) = self.address(rn, index, offset)?;
+                let value = self.load(bus, address, 2)?;
+                if let Some(base) = writeback {
+                    self.write_sp(rn, Width::W64, base);
+                }
+                self.write(rt, Width::W32, value);
             }
             StrhImmediate { rt, rn, index, offset } => {
                 let (address, writeback) = self.address(rn, index, offset)?;
@@ -977,6 +983,23 @@ impl Cpu {
             c: nzcv & 0b0010 != 0,
             v: nzcv & 0b0001 != 0,
         }
+    }
+
+    /// The second operand of ADD and SUBS (extended register): `rm` extended by
+    /// `option`, shifted left by `amount`.
+    fn extended(&self, rm: u8, option: u8, amount: u8, width: Width) -> u64 {
+        let value = self.read(rm, Width::W64);
+        // UXTB, UXTH, UXTW and UXTX keep the low 8, 16, 32 or 64 bits; the SXT forms
+        // sign-extend them.
+        let bits = 8u32 << (option & 0b11);
+        let extended = if bits == 64 {
+            value
+        } else if option & 0b100 == 0 {
+            value & ((1 << bits) - 1)
+        } else {
+            ((value << (64 - bits)) as i64 >> (64 - bits)) as u64
+        };
+        (extended << amount) & width.mask()
     }
 
     /// The architecture's `ExtendReg` for a register offset, before any shift.
