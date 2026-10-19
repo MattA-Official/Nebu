@@ -53,7 +53,9 @@ unscaled offset, so they share those variants, as LDURB and LDUR do.
 ## Decision
 
 1. **TTBR0_EL1's ASID is stored and ignored**, and so is the nG bit. **TLBI ASIDE1**
-   runs and does nothing.
+   runs and does nothing. At EL0 it is undefined, as on hardware, and so are TLBI
+   VMALLE1 and IC IALLU, which until now did nothing there too: each raises an
+   exception with an unknown reason, as UDF does.
 2. **TPIDR_EL0** is stored, and EL0 may read and write it. It is the first register
    EL0 may access.
 3. **LDRH (immediate)**, in all three indexing forms, **LDURH**, **STURH** and **ADD

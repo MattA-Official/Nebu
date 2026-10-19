@@ -821,7 +821,12 @@ impl Cpu {
             Eret => next = self.exception_return()?,
             // No pipeline, caches or TLB are modelled, so a barrier has nothing to wait
             // for and there is nothing to invalidate.
-            Nop | Isb | Dsb { .. } | IcIallu | TlbiVmalle1 | TlbiAside1 { .. } => {}
+            Nop | Isb | Dsb { .. } => {}
+            // These are undefined at EL0, as on hardware.
+            IcIallu | TlbiVmalle1 | TlbiAside1 { .. } if self.el == 0 => {
+                next = self.take_exception(EC_UNKNOWN, 0, pc)?
+            }
+            IcIallu | TlbiVmalle1 | TlbiAside1 { .. } => {}
             // Nor are data caches, so there is nothing to clean, but the address must
             // still translate, as on hardware.
             DcCivac { rt } => {
@@ -1257,6 +1262,36 @@ mod tests {
         assert_eq!(cpu.sys.elr_el1, 0x80004);
         assert_eq!(cpu.sys.spsr_el1, 0x3c0 | 1 << 30); // EL0t, masked, Z set
         assert_eq!((cpu.el, cpu.spsel, cpu.pc), (1, true, 0x1400));
+    }
+
+    #[test]
+    fn tlb_maintenance_is_undefined_at_el0() {
+        let mut bus = Bus::new(uart());
+        bus.load(0x80000, &0xd5088748u32.to_le_bytes()).unwrap(); // tlbi aside1, x8
+        let mut cpu = Cpu::new(0x80000, false);
+        cpu.el = 0;
+        cpu.spsel = false;
+        cpu.sys.vbar_el1 = 0x1000;
+        cpu.step(&mut bus, false).unwrap();
+        // EC 0 (unknown reason), returning to the instruction itself.
+        assert_eq!(cpu.sys.esr_el1 >> 26, 0);
+        assert_eq!(cpu.sys.elr_el1, 0x80000);
+        assert_eq!((cpu.el, cpu.pc), (1, 0x1400));
+    }
+
+    #[test]
+    fn el0_can_use_its_thread_pointer() {
+        let mut bus = Bus::new(uart());
+        bus.load(0x80000, &0xd51bd048u32.to_le_bytes()).unwrap(); // msr tpidr_el0, x8
+        bus.load(0x80004, &0xd53bd049u32.to_le_bytes()).unwrap(); // mrs x9, tpidr_el0
+        let mut cpu = Cpu::new(0x80000, false);
+        cpu.el = 0;
+        cpu.spsel = false;
+        cpu.write(8, Width::W64, 0x1234);
+        cpu.step(&mut bus, false).unwrap();
+        cpu.step(&mut bus, false).unwrap();
+        assert_eq!(cpu.read(9, Width::W64), 0x1234);
+        assert_eq!(cpu.el, 0);
     }
 
     #[test]
