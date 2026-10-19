@@ -1,6 +1,6 @@
 # 0011. The firmware mailbox
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-19
 
 ## Context
