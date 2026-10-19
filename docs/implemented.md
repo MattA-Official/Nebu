@@ -14,6 +14,7 @@ all addressing modes.
 | ADD (immediate)              | NeOS step 2: boot            |
 | ADD (shifted register)       | NeOS step 2: panic path      |
 | ADDS (immediate)             | NeOS step 3: chainloader     |
+| ADDS (shifted register)      | NeOS stage 3: loading the root task |
 | ADR                          | NeOS step 2: boot            |
 | ADRP                         | NeOS stage 2: MMU            |
 | AND (immediate)              | NeOS step 2: boot            |
@@ -46,8 +47,10 @@ all addressing modes.
 | LDR (register)               | NeOS stage 1: fault reports  |
 | LDRB (immediate)             | NeOS step 2: panic path      |
 | LDRB (register)              | NeOS step 2: panic path      |
+| LDURB                        | NeOS stage 3: loading the root task |
 | LSLV                         | NeOS stage 1: fault reports  |
 | LSRV                         | NeOS stage 1: fault reports  |
+| MADD                         | NeOS stage 3: loading the root task |
 | MOVK                         | NeOS step 2: boot            |
 | MOVN                         | NeOS step 3: CRC-32          |
 | MOVZ                         | NeOS step 2: boot            |
@@ -65,10 +68,12 @@ all addressing modes.
 | STRB (immediate)             | NeOS step 3: storing the kernel |
 | STRH (immediate)             | NeOS step 2: panic path      |
 | STUR                         | NeOS step 2: boot            |
+| STURB                        | NeOS stage 3: loading the root task |
 | SUB (immediate)              | NeOS step 2: boot            |
 | SUB (shifted register)       | NeOS stage 2: MMU            |
 | SUBS (immediate)             | NeOS step 2: panic path      |
 | SUBS (shifted register)      | NeOS step 2: boot            |
+| SVC                          | NeOS stage 3: system calls   |
 | TBNZ                         | NeOS step 2: boot            |
 | TBZ                          | NeOS step 2: boot            |
 | TLBI VMALLE1                 | NeOS stage 2: switching page tables |
@@ -81,7 +86,9 @@ Aliases are covered by the instruction they stand for: `mov` to or from SP is AD
 `cmn` is ADDS, `bfxil` and `bfi` are BFM, `lsl`, `lsr` and `ubfiz` are UBFM, `sbfx`
 and `sxtb` are SBFM, `mov` with an immediate is MOVZ or MOVN, `tst` is ANDS, `lsl`
 and `lsr` with a register shift amount are LSLV and LSRV, `cset` and `cinc` are
-CSINC, and `mvn` is ORN.
+CSINC, `mvn` is ORN, `neg` is SUB (shifted register), `mul` is MADD, and `cmn` with a
+register is ADDS (shifted register). LDURB and STURB run as LDRB and STRB with an
+unscaled offset ([ADR 0010](decisions/0010-el0-and-system-calls.md)).
 
 ## System registers
 
@@ -103,6 +110,7 @@ CSINC, and `mvn` is ORN.
 | TCR_EL1     | Read/write | 39-bit addresses and 4 KiB pages only       | NeOS stage 2: MMU            |
 | MAIR_EL1    | Read/write | Device or Normal memory, from each attribute's top nibble | NeOS stage 2: MMU |
 | TTBR0_EL1, TTBR1_EL1 | Read/write | ASIDs are ignored                  | NeOS stage 2: MMU            |
+| CPACR_EL1   | Read/write | Only 0 (FP and SIMD trap) may be written    | NeOS stage 3: trapping floating point |
 
 Accessing a register from a lower EL than the table allows halts Nebu, because
 hardware would trap. EL1 registers need EL1 or above, and EL2 registers need EL2.
@@ -115,10 +123,12 @@ hardware would trap. EL1 registers need EL1 or above, and EL2 registers need EL2
 | Undefined instruction (`udf`) | 0x00 | NeOS stage 1: exceptions test |
 | Instruction abort          | 0x20, 0x21 | NeOS stage 2: MMU      |
 | Data abort                 | 0x24, 0x25 | NeOS stage 2: MMU test |
+| Supervisor call (`svc`)    | 0x15  | NeOS stage 3: system calls |
 
 All are taken to EL1. Any other exception halts Nebu
-([ADRs 0008](decisions/0008-exception-levels-and-exceptions.md) and
-[0009](decisions/0009-the-mmu.md)).
+([ADRs 0008](decisions/0008-exception-levels-and-exceptions.md),
+[0009](decisions/0009-the-mmu.md) and [0010](decisions/0010-el0-and-system-calls.md)).
+Exceptions from EL0 use the vectors at offset 0x400.
 
 ## Address translation
 
