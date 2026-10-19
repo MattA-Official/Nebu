@@ -6,15 +6,20 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::gpio::Gpio;
+use crate::mailbox::{self, Mailbox, Request};
 use crate::pl011::Pl011;
 
 /// RAM occupies the bottom of the address space, up to the peripherals.
 const RAM_END: u64 = 0x3F00_0000;
+/// The VideoCore mailboxes.
+const MAILBOX_BASE: u64 = 0x3F00_B880;
+/// The size of the mailboxes' register window: mailbox 0, then mailbox 1.
+const MAILBOX_WINDOW: u64 = 0x40;
 /// The GPIO controller.
 const GPIO_BASE: u64 = 0x3F20_0000;
 /// The PL011 UART (UART0).
 const UART0_BASE: u64 = 0x3F20_1000;
-/// The size of one device's register window.
+/// The size of the other devices' register windows.
 const DEVICE_WINDOW: u64 = 0x1000;
 
 /// RAM is allocated in pages of this size, the first time each page is written.
@@ -32,6 +37,8 @@ pub enum BusError {
     DeviceRegister { device: &'static str, offset: u64 },
     /// Instructions can only be fetched from RAM.
     FetchFromDevice,
+    /// A use of the firmware's mailbox that Nebu does not model.
+    Mailbox(&'static str),
 }
 
 impl fmt::Display for BusError {
@@ -43,6 +50,7 @@ impl fmt::Display for BusError {
                 write!(f, "{device} register at offset {offset:#x} not implemented for this access")
             }
             BusError::FetchFromDevice => write!(f, "instruction fetch from a device"),
+            BusError::Mailbox(what) => write!(f, "mailbox: not implemented: {what}"),
         }
     }
 }
@@ -73,12 +81,13 @@ pub struct Bus {
     ram: Ram,
     gpio: Gpio,
     uart: Pl011,
+    mailbox: Mailbox,
 }
 
 impl Bus {
     /// Creates a bus with empty RAM, GPIO in its reset state and the given UART.
     pub fn new(uart: Pl011) -> Self {
-        Bus { ram: Ram::default(), gpio: Gpio::default(), uart }
+        Bus { ram: Ram::default(), gpio: Gpio::default(), uart, mailbox: Mailbox::default() }
     }
 
     /// Copies `bytes` into RAM at `address`, as the firmware does with the kernel image.
@@ -122,6 +131,12 @@ impl Bus {
                 .read(offset)
                 .map(u64::from)
                 .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "mailbox", offset)) if size == 4 => self
+                .mailbox
+                .read(offset)
+                .map_err(BusError::Mailbox)?
+                .map(u64::from)
+                .ok_or(BusError::DeviceRegister { device, offset }),
             Some((device, offset)) => Err(BusError::DeviceRegister { device, offset }),
             None => Err(BusError::Unmapped),
         }
@@ -147,9 +162,35 @@ impl Bus {
                 .uart
                 .write(offset, value as u32)
                 .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "mailbox", offset)) if size == 4 => {
+                match self.mailbox.write(offset, value as u32).map_err(BusError::Mailbox)? {
+                    Some(Request::Property { address }) => self.answer_property(address),
+                    None => Err(BusError::DeviceRegister { device, offset }),
+                }
+            }
             Some((device, offset)) => Err(BusError::DeviceRegister { device, offset }),
             None => Err(BusError::Unmapped),
         }
+    }
+
+    /// Answers the property message at `address` in RAM, as the firmware would.
+    fn answer_property(&mut self, address: u64) -> Result<(), BusError> {
+        let size = self.read_ram(address, 4);
+        // The firmware's own limit is far larger, but NeOS's messages are small.
+        if !(12..=0x1000).contains(&size) || !size.is_multiple_of(4) || address + size > RAM_END {
+            return Err(BusError::Mailbox("a property message of that size or place"));
+        }
+        let mut message: Vec<u32> = (address..address + size)
+            .step_by(4)
+            .map(|word| self.read_ram(word, 4) as u32)
+            .collect();
+        mailbox::answer(&mut message).map_err(BusError::Mailbox)?;
+        for (word, value) in (address..).step_by(4).zip(message) {
+            for index in 0..4 {
+                self.ram.write_byte(word + index, (value >> (8 * index)) as u8);
+            }
+        }
+        Ok(())
     }
 
     fn read_ram(&self, address: u64, size: u64) -> u64 {
@@ -161,6 +202,9 @@ impl Bus {
 
 /// Finds the device whose registers include `address`, and the offset within it.
 fn device_at(address: u64) -> Option<(&'static str, u64)> {
+    if (MAILBOX_BASE..MAILBOX_BASE + MAILBOX_WINDOW).contains(&address) {
+        return Some(("mailbox", address - MAILBOX_BASE));
+    }
     if (GPIO_BASE..GPIO_BASE + DEVICE_WINDOW).contains(&address) {
         return Some(("GPIO", address - GPIO_BASE));
     }
@@ -203,5 +247,19 @@ mod tests {
         assert_eq!(bus.read(UART0_BASE + 0x18, 8), Err(error));
         let error = BusError::DeviceRegister { device: "PL011 UART", offset: 0x48 };
         assert_eq!(bus.write(UART0_BASE + 0x48, 4, 0), Err(error));
+    }
+
+    #[test]
+    fn answers_property_messages_in_ram() {
+        let mut bus = bus();
+        for (address, word) in (0x1000..).step_by(4).zip([32, 0, 0x0001_0005, 8, 0, 0, 0, 0]) {
+            bus.write(address, 4, word).unwrap();
+        }
+        assert_eq!(bus.read(MAILBOX_BASE + 0x18, 4), Ok(1 << 30));
+        bus.write(MAILBOX_BASE + 0x20, 4, 0xC000_1008).unwrap();
+        assert_eq!(bus.read(MAILBOX_BASE + 0x18, 4), Ok(0));
+        assert_eq!(bus.read(MAILBOX_BASE, 4), Ok(0xC000_1008));
+        assert_eq!(bus.read(0x1004, 4), Ok(0x8000_0000));
+        assert_eq!(bus.read(0x1018, 4), Ok(0x3C00_0000));
     }
 }

@@ -34,6 +34,7 @@ all addressing modes.
 | CCMP (register)              | NeOS stage 2: MMU            |
 | CSEL                         | NeOS stage 1: fault reports  |
 | CSINC                        | NeOS stage 2: MMU            |
+| DC CIVAC                     | NeOS stage 4: asking the firmware about memory |
 | DSB                          | NeOS step 3: starting the kernel |
 | EOR (immediate)              | NeOS stage 2: MMU            |
 | EOR (shifted register)       | NeOS step 3: CRC-32          |
@@ -55,6 +56,7 @@ all addressing modes.
 | MOVN                         | NeOS step 3: CRC-32          |
 | MOVZ                         | NeOS step 2: boot            |
 | MRS                          | NeOS step 2: boot            |
+| MSUB                         | NeOS stage 4: printing decimal numbers |
 | MSR (register)               | NeOS stage 1: dropping to EL1, exception vectors |
 | NOP                          | NeOS step 2: boot            |
 | ORN (shifted register)       | NeOS stage 2: MMU            |
@@ -86,7 +88,7 @@ Aliases are covered by the instruction they stand for: `mov` to or from SP is AD
 `cmn` is ADDS, `bfxil` and `bfi` are BFM, `lsl`, `lsr` and `ubfiz` are UBFM, `sbfx`
 and `sxtb` are SBFM, `mov` with an immediate is MOVZ or MOVN, `tst` is ANDS, `lsl`
 and `lsr` with a register shift amount are LSLV and LSRV, `cset` and `cinc` are
-CSINC, `mvn` is ORN, `neg` is SUB (shifted register), `mul` is MADD, and `cmn` with a
+CSINC, `mvn` is ORN, `neg` is SUB (shifted register), `mul` is MADD, `msub` is used by `%`, and `cmn` with a
 register is ADDS (shifted register). LDURB and STURB run as LDRB and STRB with an
 unscaled offset ([ADR 0010](decisions/0010-el0-and-system-calls.md)).
 
@@ -111,6 +113,7 @@ unscaled offset ([ADR 0010](decisions/0010-el0-and-system-calls.md)).
 | MAIR_EL1    | Read/write | Device or Normal memory, from each attribute's top nibble | NeOS stage 2: MMU |
 | TTBR0_EL1, TTBR1_EL1 | Read/write | ASIDs are ignored                  | NeOS stage 2: MMU            |
 | CPACR_EL1   | Read/write | Only 0 (FP and SIMD trap) may be written    | NeOS stage 3: trapping floating point |
+| CTR_EL0     | Read       | `0x8444_8004`: 64-byte cache lines; EL1 and above only | NeOS stage 4: cleaning the data cache |
 
 Accessing a register from a lower EL than the table allows halts Nebu, because
 hardware would trap. EL1 registers need EL1 or above, and EL2 registers need EL2.
@@ -145,6 +148,7 @@ the tables ([ADR 0009](decisions/0009-the-mmu.md)).
 | PL011 UART        | DR (write), FR (read), ICR (write); IBRD, FBRD, LCRH, CR, IMSC (read and write) | NeOS step 2: console |
 | PL011 UART        | DR (read): received bytes, from standard input    | NeOS step 3: chainloader |
 | GPIO              | GPFSEL1, GPPUD, GPPUDCLK0 (read and write)        | NeOS step 3: routing the UART to the pins |
+| Mailbox           | Mailbox 0's READ and STATUS, mailbox 1's WRITE; channel 8 with the GET_ARM_MEMORY tag only ([ADR 0011](decisions/0011-the-firmware-mailbox.md)) | NeOS stage 4: how much memory there is |
 
 ## Semihosting
 
