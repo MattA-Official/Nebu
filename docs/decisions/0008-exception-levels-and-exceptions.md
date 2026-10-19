@@ -1,6 +1,6 @@
 # 0008. Exception levels and exceptions
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-19
 
 ## Context
