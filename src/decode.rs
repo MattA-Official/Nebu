@@ -85,13 +85,84 @@ pub enum Extend {
     Sxtx,
 }
 
-/// A system register that `MRS` can read.
+/// A system register that `MRS` or `MSR` can name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemRegister {
     /// The multiprocessor affinity register: which core this is.
     MpidrEl1,
     /// The current exception level.
     CurrentEl,
+    /// EL1's system control register: the MMU, caches and alignment checks.
+    SctlrEl1,
+    /// EL1's saved program status register, written when an exception is taken.
+    SpsrEl1,
+    /// EL1's exception link register: where `eret` returns to.
+    ElrEl1,
+    /// The stack pointer of EL0.
+    SpEl0,
+    /// EL1's exception syndrome register: why the last exception happened.
+    EsrEl1,
+    /// EL1's fault address register.
+    FarEl1,
+    /// EL1's vector base address register: where its exception vectors are.
+    VbarEl1,
+    /// The hypervisor configuration register.
+    HcrEl2,
+    /// The counter-timer hypervisor control register.
+    CnthctlEl2,
+    /// The virtual counter offset.
+    CntvoffEl2,
+    /// EL2's saved program status register.
+    SpsrEl2,
+    /// EL2's exception link register.
+    ElrEl2,
+    /// The stack pointer of EL1.
+    SpEl1,
+}
+
+impl SystemRegister {
+    /// The register with this encoding, if Nebu models it.
+    fn from_encoding(op0: u8, op1: u8, crn: u8, crm: u8, op2: u8) -> Option<Self> {
+        Some(match (op0, op1, crn, crm, op2) {
+            (3, 0, 0, 0, 5) => SystemRegister::MpidrEl1,
+            (3, 0, 4, 2, 2) => SystemRegister::CurrentEl,
+            (3, 0, 1, 0, 0) => SystemRegister::SctlrEl1,
+            (3, 0, 4, 0, 0) => SystemRegister::SpsrEl1,
+            (3, 0, 4, 0, 1) => SystemRegister::ElrEl1,
+            (3, 0, 4, 1, 0) => SystemRegister::SpEl0,
+            (3, 0, 5, 2, 0) => SystemRegister::EsrEl1,
+            (3, 0, 6, 0, 0) => SystemRegister::FarEl1,
+            (3, 0, 12, 0, 0) => SystemRegister::VbarEl1,
+            (3, 4, 1, 1, 0) => SystemRegister::HcrEl2,
+            (3, 4, 14, 1, 0) => SystemRegister::CnthctlEl2,
+            (3, 4, 14, 0, 3) => SystemRegister::CntvoffEl2,
+            (3, 4, 4, 0, 0) => SystemRegister::SpsrEl2,
+            (3, 4, 4, 0, 1) => SystemRegister::ElrEl2,
+            (3, 4, 4, 1, 0) => SystemRegister::SpEl1,
+            _ => return None,
+        })
+    }
+
+    /// The register's architectural name.
+    pub fn name(self) -> &'static str {
+        match self {
+            SystemRegister::MpidrEl1 => "MPIDR_EL1",
+            SystemRegister::CurrentEl => "CurrentEL",
+            SystemRegister::SctlrEl1 => "SCTLR_EL1",
+            SystemRegister::SpsrEl1 => "SPSR_EL1",
+            SystemRegister::ElrEl1 => "ELR_EL1",
+            SystemRegister::SpEl0 => "SP_EL0",
+            SystemRegister::EsrEl1 => "ESR_EL1",
+            SystemRegister::FarEl1 => "FAR_EL1",
+            SystemRegister::VbarEl1 => "VBAR_EL1",
+            SystemRegister::HcrEl2 => "HCR_EL2",
+            SystemRegister::CnthctlEl2 => "CNTHCTL_EL2",
+            SystemRegister::CntvoffEl2 => "CNTVOFF_EL2",
+            SystemRegister::SpsrEl2 => "SPSR_EL2",
+            SystemRegister::ElrEl2 => "ELR_EL2",
+            SystemRegister::SpEl1 => "SP_EL1",
+        }
+    }
 }
 
 /// A decoded instruction.
@@ -114,6 +185,8 @@ pub enum Instruction {
     SubsImmediate { width: Width, rd: u8, rn: u8, imm: u64 },
     /// AND (immediate): `rd = rn & imm`. `rd` 31 is SP, `rn` 31 is the zero register.
     AndImmediate { width: Width, rd: u8, rn: u8, imm: u64 },
+    /// ORR (immediate): `rd = rn | imm`. `rd` 31 is SP, `rn` 31 is the zero register.
+    OrrImmediate { width: Width, rd: u8, rn: u8, imm: u64 },
     /// MOVN: `rd = !(imm16 << shift)`. 31 is the zero register.
     Movn { width: Width, rd: u8, imm16: u16, shift: u8 },
     /// MOVZ: `rd = imm16 << shift`. 31 is the zero register.
@@ -140,6 +213,14 @@ pub enum Instruction {
     OrrShiftedRegister { width: Width, rd: u8, rn: u8, rm: u8, shift: Shift, amount: u8 },
     /// EOR (shifted register): `rd = rn ^ (rm shifted)`. 31 is the zero register.
     EorShiftedRegister { width: Width, rd: u8, rn: u8, rm: u8, shift: Shift, amount: u8 },
+    /// ANDS (shifted register): `rd = rn & (rm shifted)`, setting the flags.
+    /// 31 is the zero register.
+    AndsShiftedRegister { width: Width, rd: u8, rn: u8, rm: u8, shift: Shift, amount: u8 },
+    /// LSLV and LSRV: `rd = rn` shifted by `rm` modulo the register width. `shift` is
+    /// only ever `Lsl` or `Lsr`. 31 is the zero register.
+    ShiftVariable { width: Width, rd: u8, rn: u8, rm: u8, shift: Shift },
+    /// CSEL: `rd = if condition holds { rn } else { rm }`. 31 is the zero register.
+    Csel { width: Width, rd: u8, rn: u8, rm: u8, condition: u8 },
     /// B: branch to `pc + offset`.
     B { offset: i64 },
     /// BL: branch to `pc + offset`, putting the return address in x30.
@@ -152,12 +233,22 @@ pub enum Instruction {
     BCond { condition: u8, offset: i64 },
     /// CBZ: branch to `pc + offset` if `rt` is zero. 31 is the zero register.
     Cbz { width: Width, rt: u8, offset: i64 },
+    /// CBNZ: branch to `pc + offset` if `rt` is not zero. 31 is the zero register.
+    Cbnz { width: Width, rt: u8, offset: i64 },
     /// TBZ: branch to `pc + offset` if bit `bit` of `rt` is zero.
     Tbz { rt: u8, bit: u8, offset: i64 },
     /// TBNZ: branch to `pc + offset` if bit `bit` of `rt` is one.
     Tbnz { rt: u8, bit: u8, offset: i64 },
     /// HLT: stop for an external debugger, or make a semihosting call.
     Hlt { imm16: u16 },
+    /// BRK: take a Breakpoint Instruction exception.
+    Brk { imm16: u16 },
+    /// UDF: a permanently undefined instruction, which takes an Undefined Instruction
+    /// exception.
+    Udf { imm16: u16 },
+    /// ERET: return from an exception, restoring PSTATE from the current SPSR and
+    /// jumping to the current ELR.
+    Eret,
     /// NOP: do nothing.
     Nop,
     /// WFE: wait for an event.
@@ -171,6 +262,8 @@ pub enum Instruction {
     IcIallu,
     /// MRS: read a system register into `rt`. 31 is the zero register.
     Mrs { rt: u8, register: SystemRegister },
+    /// MSR (register): write `rt` to a system register. 31 is the zero register.
+    Msr { register: SystemRegister, rt: u8 },
     /// LDR (literal): load `rt` from `pc + offset`. 31 is the zero register.
     LdrLiteral { width: Width, rt: u8, offset: i64 },
     /// LDR (immediate): load `rt` from memory. `rn` 31 is SP, `rt` 31 the zero register.
@@ -183,6 +276,10 @@ pub enum Instruction {
     /// LDRB (register): load a byte from `rn + (rm extended)` into `rt`.
     /// `rn` 31 is SP; `rt` and `rm` 31 the zero register.
     LdrbRegister { rt: u8, rn: u8, rm: u8, extend: Extend },
+    /// LDR (register): load `rt` from `rn + (rm extended, shifted by `amount`)`.
+    /// `amount` is 0 or log2 of the access size. `rn` 31 is SP; `rt` and `rm` 31 the
+    /// zero register.
+    LdrRegister { width: Width, rt: u8, rn: u8, rm: u8, extend: Extend, amount: u8 },
     /// STRB (immediate): store the low 8 bits of `rt`.
     /// `rn` 31 is SP, `rt` 31 the zero register.
     StrbImmediate { rt: u8, rn: u8, index: Index, offset: i64 },
@@ -208,7 +305,7 @@ pub enum DecodeError {
     /// The encoding is unallocated: real hardware raises an Undefined Instruction
     /// exception.
     Unallocated,
-    /// An `MRS` of a system register Nebu does not model.
+    /// An `MRS` or `MSR` of a system register Nebu does not model.
     SystemRegister { op0: u8, op1: u8, crn: u8, crm: u8, op2: u8 },
     /// The architecture leaves the behaviour CONSTRAINED UNPREDICTABLE.
     Unpredictable(&'static str),
@@ -250,6 +347,10 @@ pub fn decode(word: u32) -> Result<Instruction, DecodeError> {
         0b1010 | 0b1011 => branches_exceptions_system(word),
         op0 if op0 & 0b0101 == 0b0100 => loads_and_stores(word),
         op0 if op0 & 0b0111 == 0b0101 => data_processing_register(word),
+        // Reserved: UDF is the only allocated encoding.
+        0b0000 if bits(word, 31, 16) == 0 => {
+            Ok(Instruction::Udf { imm16: bits(word, 15, 0) as u16 })
+        }
         _ => Err(DecodeError::Unimplemented),
     }
 }
@@ -288,7 +389,8 @@ fn data_processing_immediate(word: u32) -> Result<Instruction, DecodeError> {
                 .ok_or(DecodeError::Unallocated)?;
             match bits(word, 30, 29) {
                 0b00 => Ok(Instruction::AndImmediate { width, rd, rn, imm }),
-                _ => Err(DecodeError::Unimplemented), // ORR, EOR, ANDS
+                0b01 => Ok(Instruction::OrrImmediate { width, rd, rn, imm }),
+                _ => Err(DecodeError::Unimplemented), // EOR, ANDS
             }
         }
         // Move wide (immediate).
@@ -402,12 +504,14 @@ fn branches_exceptions_system(word: u32) -> Result<Instruction, DecodeError> {
 
     // Compare and branch (immediate).
     if bits(word, 30, 25) == 0b01_1010 {
-        if bits(word, 24, 24) == 1 {
-            return Err(DecodeError::Unimplemented); // CBNZ
-        }
         let width = Width::from_bit(bits(word, 31, 31));
         let offset = sign_extend(bits(word, 23, 5), 19) * 4;
-        return Ok(Instruction::Cbz { width, rt: reg(word, 0), offset });
+        let rt = reg(word, 0);
+        return Ok(if bits(word, 24, 24) == 0 {
+            Instruction::Cbz { width, rt, offset }
+        } else {
+            Instruction::Cbnz { width, rt, offset }
+        });
     }
 
     // Test and branch (immediate).
@@ -429,6 +533,7 @@ fn branches_exceptions_system(word: u32) -> Result<Instruction, DecodeError> {
         return match (opc, op2, op3, op4) {
             (0b0000, 0b11111, 0, 0) => Ok(Instruction::Br { rn: reg(word, 5) }),
             (0b0010, 0b11111, 0, 0) => Ok(Instruction::Ret { rn: reg(word, 5) }),
+            (0b0100, 0b11111, 0, 0) if reg(word, 5) == 31 => Ok(Instruction::Eret),
             _ => Err(DecodeError::Unimplemented),
         };
     }
@@ -436,8 +541,11 @@ fn branches_exceptions_system(word: u32) -> Result<Instruction, DecodeError> {
     // Exception generation.
     if bits(word, 31, 24) == 0b1101_0100 {
         let (opc, op2, ll) = (bits(word, 23, 21), bits(word, 4, 2), bits(word, 1, 0));
-        if (opc, op2, ll) == (0b010, 0b000, 0b00) {
-            return Ok(Instruction::Hlt { imm16: bits(word, 20, 5) as u16 });
+        let imm16 = bits(word, 20, 5) as u16;
+        match (opc, op2, ll) {
+            (0b010, 0b000, 0b00) => return Ok(Instruction::Hlt { imm16 }),
+            (0b001, 0b000, 0b00) => return Ok(Instruction::Brk { imm16 }),
+            _ => {}
         }
         return Err(DecodeError::Unimplemented);
     }
@@ -479,16 +587,15 @@ fn system(word: u32) -> Result<Instruction, DecodeError> {
             (0, 7, 5, 0, 31) => Ok(Instruction::IcIallu),
             _ => Err(DecodeError::Unimplemented),
         },
-        // MRS.
-        (1, 2 | 3, _, _) => {
-            let register = match (op0, op1, crn, crm, op2) {
-                (3, 0, 0, 0, 5) => SystemRegister::MpidrEl1,
-                (3, 0, 4, 2, 2) => SystemRegister::CurrentEl,
-                _ => {
-                    return Err(DecodeError::SystemRegister { op0, op1, crn, crm, op2 });
-                }
-            };
-            Ok(Instruction::Mrs { rt, register })
+        // MRS and MSR (register).
+        (_, 2 | 3, _, _) => {
+            let register = SystemRegister::from_encoding(op0, op1, crn, crm, op2)
+                .ok_or(DecodeError::SystemRegister { op0, op1, crn, crm, op2 })?;
+            Ok(if l == 1 {
+                Instruction::Mrs { rt, register }
+            } else {
+                Instruction::Msr { register, rt }
+            })
         }
         _ => Err(DecodeError::Unimplemented),
     }
@@ -576,6 +683,18 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
                     (0b00, 0b01) => {
                         Ok(Instruction::LdrbRegister { rt, rn, rm: reg(word, 16), extend })
                     }
+                    (0b10 | 0b11, 0b01) => {
+                        let width = Width::from_bit(size & 1);
+                        let amount = if bits(word, 12, 12) == 1 { size as u8 } else { 0 };
+                        Ok(Instruction::LdrRegister {
+                            width,
+                            rt,
+                            rn,
+                            rm: reg(word, 16),
+                            extend,
+                            amount,
+                        })
+                    }
                     _ => Err(DecodeError::Unimplemented),
                 };
             }
@@ -623,7 +742,8 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
             (0b00, 0) => Ok(Instruction::AndShiftedRegister { width, rd, rn, rm, shift, amount }),
             (0b01, 0) => Ok(Instruction::OrrShiftedRegister { width, rd, rn, rm, shift, amount }),
             (0b10, 0) => Ok(Instruction::EorShiftedRegister { width, rd, rn, rm, shift, amount }),
-            _ => Err(DecodeError::Unimplemented), // BIC, ORN, EON, ANDS, BICS
+            (0b11, 0) => Ok(Instruction::AndsShiftedRegister { width, rd, rn, rm, shift, amount }),
+            _ => Err(DecodeError::Unimplemented), // BIC, ORN, EON, BICS
         };
     }
 
@@ -645,6 +765,31 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
             0b00 => Ok(Instruction::AddShiftedRegister { width, rd, rn, rm, shift, amount }),
             0b11 => Ok(Instruction::SubsShiftedRegister { width, rd, rn, rm, shift, amount }),
             _ => Err(DecodeError::Unimplemented), // ADDS, SUB
+        };
+    }
+
+    // Data-processing (2 source).
+    if bits(word, 30, 21) == 0b0_1101_0110 {
+        let width = Width::from_bit(bits(word, 31, 31));
+        let (rd, rn, rm) = (reg(word, 0), reg(word, 5), reg(word, 16));
+        return match bits(word, 15, 10) {
+            0b00_1000 => Ok(Instruction::ShiftVariable { width, rd, rn, rm, shift: Shift::Lsl }),
+            0b00_1001 => Ok(Instruction::ShiftVariable { width, rd, rn, rm, shift: Shift::Lsr }),
+            _ => Err(DecodeError::Unimplemented), // ASRV, RORV, division, CRC32 and others
+        };
+    }
+
+    // Conditional select.
+    if bits(word, 28, 21) == 0b1101_0100 {
+        if bits(word, 29, 29) == 1 {
+            return Err(DecodeError::Unallocated);
+        }
+        let width = Width::from_bit(bits(word, 31, 31));
+        let (rd, rn, rm) = (reg(word, 0), reg(word, 5), reg(word, 16));
+        let condition = bits(word, 15, 12) as u8;
+        return match (bits(word, 30, 30), bits(word, 11, 10)) {
+            (0, 0b00) => Ok(Instruction::Csel { width, rd, rn, rm, condition }),
+            _ => Err(DecodeError::Unimplemented), // CSINC, CSINV, CSNEG
         };
     }
     Err(DecodeError::Unimplemented)
@@ -763,6 +908,17 @@ const BARRIER_OPTIONS: [&str; 16] = [
     "ld", "st", "sy",
 ];
 
+/// The assembler name of a register offset's extension, and the width of the offset
+/// register it applies to.
+fn extend_name(extend: Extend) -> (&'static str, Width) {
+    match extend {
+        Extend::Uxtw => ("uxtw", Width::W32),
+        Extend::Lsl => ("lsl", Width::W64),
+        Extend::Sxtw => ("sxtw", Width::W32),
+        Extend::Sxtx => ("sxtx", Width::W64),
+    }
+}
+
 /// The assembler names of the condition codes.
 const CONDITIONS: [&str; 16] = [
     "eq", "ne", "hs", "lo", "mi", "pl", "vs", "vc", "hi", "ls", "ge", "lt", "gt", "le", "al", "nv",
@@ -781,6 +937,9 @@ impl fmt::Display for Instruction {
             }
             AndImmediate { width, rd, rn, imm } => {
                 write!(f, "and {}, {}, #{imm:#x}", sp(rd, width), zr(rn, width))
+            }
+            OrrImmediate { width, rd, rn, imm } => {
+                write!(f, "orr {}, {}, #{imm:#x}", sp(rd, width), zr(rn, width))
             }
             Movn { width, rd, imm16, shift } => {
                 write!(f, "movn {}, #{imm16:#x}, lsl #{shift}", zr(rd, width))
@@ -831,6 +990,25 @@ impl fmt::Display for Instruction {
             EorShiftedRegister { width, rd, rn, rm, shift, amount } => {
                 ShiftedRegister { name: "eor", width, rd, rn, rm, shift, amount }.fmt(f)
             }
+            AndsShiftedRegister { width, rd, rn, rm, shift, amount } => {
+                ShiftedRegister { name: "ands", width, rd, rn, rm, shift, amount }.fmt(f)
+            }
+            ShiftVariable { width, rd, rn, rm, shift } => write!(
+                f,
+                "{}v {}, {}, {}",
+                shift_name(shift),
+                zr(rd, width),
+                zr(rn, width),
+                zr(rm, width)
+            ),
+            Csel { width, rd, rn, rm, condition } => write!(
+                f,
+                "csel {}, {}, {}, {}",
+                zr(rd, width),
+                zr(rn, width),
+                zr(rm, width),
+                CONDITIONS[usize::from(condition)]
+            ),
             B { offset } => write!(f, "b {}", Relative(offset)),
             Bl { offset } => write!(f, "bl {}", Relative(offset)),
             Br { rn } => write!(f, "br {}", zr(rn, Width::W64)),
@@ -839,6 +1017,9 @@ impl fmt::Display for Instruction {
                 write!(f, "b.{} {}", CONDITIONS[usize::from(condition)], Relative(offset))
             }
             Cbz { width, rt, offset } => write!(f, "cbz {}, {}", zr(rt, width), Relative(offset)),
+            Cbnz { width, rt, offset } => {
+                write!(f, "cbnz {}, {}", zr(rt, width), Relative(offset))
+            }
             Tbz { rt, bit, offset } => {
                 let width = if bit >= 32 { Width::W64 } else { Width::W32 };
                 write!(f, "tbz {}, #{bit}, {}", zr(rt, width), Relative(offset))
@@ -848,6 +1029,9 @@ impl fmt::Display for Instruction {
                 write!(f, "tbnz {}, #{bit}, {}", zr(rt, width), Relative(offset))
             }
             Hlt { imm16 } => write!(f, "hlt #{imm16:#x}"),
+            Brk { imm16 } => write!(f, "brk #{imm16:#x}"),
+            Udf { imm16 } => write!(f, "udf #{imm16:#x}"),
+            Eret => write!(f, "eret"),
             Nop => write!(f, "nop"),
             Wfe => write!(f, "wfe"),
             Isb => write!(f, "isb"),
@@ -856,13 +1040,8 @@ impl fmt::Display for Instruction {
                 name => write!(f, "dsb {name}"),
             },
             IcIallu => write!(f, "ic iallu"),
-            Mrs { rt, register } => {
-                let name = match register {
-                    SystemRegister::MpidrEl1 => "MPIDR_EL1",
-                    SystemRegister::CurrentEl => "CurrentEL",
-                };
-                write!(f, "mrs {}, {name}", zr(rt, Width::W64))
-            }
+            Mrs { rt, register } => write!(f, "mrs {}, {}", zr(rt, Width::W64), register.name()),
+            Msr { register, rt } => write!(f, "msr {}, {}", register.name(), zr(rt, Width::W64)),
             LdrLiteral { width, rt, offset } => {
                 write!(f, "ldr {}, {}", zr(rt, width), Relative(offset))
             }
@@ -874,6 +1053,16 @@ impl fmt::Display for Instruction {
             }
             LdrbImmediate { rt, rn, index, offset } => {
                 write!(f, "ldrb {}, {}", zr(rt, Width::W32), Address { rn, index, offset })
+            }
+            LdrRegister { width, rt, rn, rm, extend, amount } => {
+                let (name, rm_width) = extend_name(extend);
+                write!(
+                    f,
+                    "ldr {}, [{}, {}, {name} #{amount}]",
+                    zr(rt, width),
+                    sp(rn, Width::W64),
+                    zr(rm, rm_width)
+                )
             }
             LdrbRegister { rt, rn, rm, extend } => {
                 let (name, width) = match extend {
@@ -1052,6 +1241,42 @@ mod tests {
                 Ldp { width: W64, rt: 0, rt2: 8, rn: 31, index: Index::Offset, offset: 0 },
             ),
             (0x390002a4, StrbImmediate { rt: 4, rn: 21, index: Index::Offset, offset: 0 }),
+            // Stage 1: dropping to EL1, the exception vectors and the fault reports.
+            (0xd51c1101, Msr { register: SystemRegister::HcrEl2, rt: 1 }),
+            (0xd53ce101, Mrs { rt: 1, register: SystemRegister::CnthctlEl2 }),
+            (0xd51ce07f, Msr { register: SystemRegister::CntvoffEl2, rt: 31 }),
+            (0xd5181001, Msr { register: SystemRegister::SctlrEl1, rt: 1 }),
+            (0xd51c4001, Msr { register: SystemRegister::SpsrEl2, rt: 1 }),
+            (0xd51c4021, Msr { register: SystemRegister::ElrEl2, rt: 1 }),
+            (0xd518c008, Msr { register: SystemRegister::VbarEl1, rt: 8 }),
+            (0xd5384102, Mrs { rt: 2, register: SystemRegister::SpEl0 }),
+            (0xd5384022, Mrs { rt: 2, register: SystemRegister::ElrEl1 }),
+            (0xd5384003, Mrs { rt: 3, register: SystemRegister::SpsrEl1 }),
+            (0xd5385202, Mrs { rt: 2, register: SystemRegister::EsrEl1 }),
+            (0xd5386003, Mrs { rt: 3, register: SystemRegister::FarEl1 }),
+            (0xd69f03e0, Eret),
+            (0xd4200000, Brk { imm16: 0 }),
+            (0x00000000, Udf { imm16: 0 }),
+            (0xb2400421, OrrImmediate { width: W64, rd: 1, rn: 1, imm: 0b11 }),
+            (0xb5001f49, Cbnz { width: W64, rt: 9, offset: 0x3e8 }),
+            (0x1a8b310a, Csel { width: W32, rd: 10, rn: 8, rm: 11, condition: 0b0011 }),
+            (0x9aca216a, ShiftVariable { width: W64, rd: 10, rn: 11, rm: 10, shift: Shift::Lsl }),
+            (0x9acc252c, ShiftVariable { width: W64, rd: 12, rn: 9, rm: 12, shift: Shift::Lsr }),
+            (
+                0xea0b015f,
+                AndsShiftedRegister {
+                    width: W64,
+                    rd: 31,
+                    rn: 10,
+                    rm: 11,
+                    shift: Shift::Lsl,
+                    amount: 0,
+                },
+            ),
+            (
+                0xf86a698a,
+                LdrRegister { width: W64, rt: 10, rn: 12, rm: 10, extend: Extend::Lsl, amount: 0 },
+            ),
         ];
         for (word, expected) in cases {
             assert_eq!(decode(word), Ok(expected), "decoding {word:#010x}");
@@ -1068,18 +1293,23 @@ mod tests {
         assert_eq!(decode(0x54000062).unwrap().to_string(), "b.hs #+0xc");
         assert_eq!(decode(0xd5033f9f).unwrap().to_string(), "dsb sy");
         assert_eq!(decode(0x4a5d1821).unwrap().to_string(), "eor w1, w1, w29, lsr #6");
+        assert_eq!(decode(0xd518c008).unwrap().to_string(), "msr VBAR_EL1, x8");
+        assert_eq!(decode(0x1a8b310a).unwrap().to_string(), "csel w10, w8, w11, lo");
+        assert_eq!(decode(0x9aca216a).unwrap().to_string(), "lslv x10, x11, x10");
+        assert_eq!(decode(0xf86a698a).unwrap().to_string(), "ldr x10, [x12, x10, lsl #0]");
     }
 
     #[test]
     fn rejects_instructions_neos_does_not_use() {
         assert_eq!(decode(0xd63f0100), Err(DecodeError::Unimplemented)); // blr x8
         assert_eq!(decode(0xd50b7520), Err(DecodeError::Unimplemented)); // ic ivau, x0
-        assert_eq!(decode(0xb5000061), Err(DecodeError::Unimplemented)); // cbnz x1
+        assert_eq!(decode(0x9acb2949), Err(DecodeError::Unimplemented)); // asrv x9, x10, x11
+        assert_eq!(decode(0x1a8b350a), Err(DecodeError::Unimplemented)); // csinc w10, w8, w11, lo
         assert_eq!(decode(0xd503207f), Err(DecodeError::Unimplemented)); // wfi
         assert_eq!(decode(0x1e202008), Err(DecodeError::Unimplemented)); // fcmp s0, s0
         assert_eq!(
-            decode(0xd5381000), // mrs x0, SCTLR_EL1
-            Err(DecodeError::SystemRegister { op0: 3, op1: 0, crn: 1, crm: 0, op2: 0 })
+            decode(0xd5382000), // mrs x0, TTBR0_EL1
+            Err(DecodeError::SystemRegister { op0: 3, op1: 0, crn: 2, crm: 0, op2: 0 })
         );
     }
 

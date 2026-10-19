@@ -119,10 +119,11 @@ fn dump_registers(cpu: &Cpu) {
     let f = cpu.flags;
     let flag = |set: bool, name: char| if set { name } else { '-' };
     eprintln!(
-        "  sp  {:#018x}   pc  {:#018x}   EL{}  {}{}{}{}",
-        cpu.sp,
+        "  sp  {:#018x}   pc  {:#018x}   EL{}{}  {}{}{}{}",
+        cpu.sp(),
         cpu.pc,
         cpu.el,
+        if cpu.spsel { 'h' } else { 't' },
         flag(f.n, 'N'),
         flag(f.z, 'Z'),
         flag(f.c, 'C'),
