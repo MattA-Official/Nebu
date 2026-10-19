@@ -24,21 +24,27 @@ all addressing modes.
 | B                            | NeOS step 2: boot            |
 | B.cond                       | NeOS step 2: boot            |
 | BFM                          | NeOS step 2: boot            |
+| BIC (shifted register)       | NeOS stage 4: capabilities   |
+| BICS (shifted register)      | NeOS stage 4: capabilities   |
 | BL                           | NeOS step 2: boot            |
 | BLR                          | NeOS stage 2: switching page tables |
 | BR                           | NeOS step 3: relocation, starting the kernel |
 | BRK                          | NeOS stage 1: exceptions test |
 | CBNZ                         | NeOS stage 1: fault reports  |
 | CBZ                          | NeOS step 2: boot            |
+| CCMN (immediate)             | NeOS stage 4: capabilities   |
 | CCMP (immediate)             | NeOS stage 2: MMU            |
 | CCMP (register)              | NeOS stage 2: MMU            |
+| CLZ                          | NeOS stage 4: splitting memory into untyped blocks |
 | CSEL                         | NeOS stage 1: fault reports  |
 | CSINC                        | NeOS stage 2: MMU            |
+| CSINV                        | NeOS stage 4: capability test |
 | DC CIVAC                     | NeOS stage 4: asking the firmware about memory |
 | DSB                          | NeOS step 3: starting the kernel |
 | EOR (immediate)              | NeOS stage 2: MMU            |
 | EOR (shifted register)       | NeOS step 3: CRC-32          |
 | ERET                         | NeOS stage 1: dropping to EL1, returning from exceptions |
+| EXTR                         | NeOS stage 4: capabilities   |
 | HLT                          | NeOS step 2: test exit       |
 | IC IALLU                     | NeOS step 3: starting the kernel |
 | ISB                          | NeOS step 2: UART polling    |
@@ -48,6 +54,7 @@ all addressing modes.
 | LDR (register)               | NeOS stage 1: fault reports  |
 | LDRB (immediate)             | NeOS step 2: panic path      |
 | LDRB (register)              | NeOS step 2: panic path      |
+| LDUR                         | NeOS stage 4: reading the boot info |
 | LDURB                        | NeOS stage 3: loading the root task |
 | LSLV                         | NeOS stage 1: fault reports  |
 | LSRV                         | NeOS stage 1: fault reports  |
@@ -56,13 +63,15 @@ all addressing modes.
 | MOVN                         | NeOS step 3: CRC-32          |
 | MOVZ                         | NeOS step 2: boot            |
 | MRS                          | NeOS step 2: boot            |
-| MSUB                         | NeOS stage 4: printing decimal numbers |
 | MSR (register)               | NeOS stage 1: dropping to EL1, exception vectors |
+| MSUB                         | NeOS stage 4: printing decimal numbers |
 | NOP                          | NeOS step 2: boot            |
 | ORN (shifted register)       | NeOS stage 2: MMU            |
 | ORR (immediate)              | NeOS stage 1: dropping to EL1 |
 | ORR (shifted register)       | NeOS step 2: panic path      |
+| RBIT                         | NeOS stage 4: splitting memory into untyped blocks |
 | RET                          | NeOS step 2: panic path      |
+| SBCS                         | NeOS stage 4: capabilities   |
 | SBFM                         | NeOS step 3: CRC-32          |
 | STP                          | NeOS step 2: test exit       |
 | STR (immediate)              | NeOS step 2: boot            |
@@ -73,6 +82,7 @@ all addressing modes.
 | STURB                        | NeOS stage 3: loading the root task |
 | SUB (immediate)              | NeOS step 2: boot            |
 | SUB (shifted register)       | NeOS stage 2: MMU            |
+| SUBS (extended register)     | NeOS stage 4: capability test |
 | SUBS (immediate)             | NeOS step 2: panic path      |
 | SUBS (shifted register)      | NeOS step 2: boot            |
 | SVC                          | NeOS stage 3: system calls   |
@@ -81,6 +91,7 @@ all addressing modes.
 | TLBI VMALLE1                 | NeOS stage 2: switching page tables |
 | UBFM                         | NeOS step 3: CRC-32          |
 | UDF                          | NeOS stage 1: exceptions test |
+| UMULH                        | NeOS stage 4: capabilities   |
 | WFE                          | NeOS step 2: parking cores   |
 
 Aliases are covered by the instruction they stand for: `mov` to or from SP is ADD
@@ -88,9 +99,12 @@ Aliases are covered by the instruction they stand for: `mov` to or from SP is AD
 `cmn` is ADDS, `bfxil` and `bfi` are BFM, `lsl`, `lsr` and `ubfiz` are UBFM, `sbfx`
 and `sxtb` are SBFM, `mov` with an immediate is MOVZ or MOVN, `tst` is ANDS, `lsl`
 and `lsr` with a register shift amount are LSLV and LSRV, `cset` and `cinc` are
-CSINC, `mvn` is ORN, `neg` is SUB (shifted register), `mul` is MADD, `msub` is used by `%`, and `cmn` with a
-register is ADDS (shifted register). LDURB and STURB run as LDRB and STRB with an
-unscaled offset ([ADR 0010](decisions/0010-el0-and-system-calls.md)).
+CSINC, `mvn` is ORN, `neg` is SUB (shifted register), `mul` is MADD, `cmn` with a
+register is ADDS (shifted register), `ngcs` is SBCS, `ror` with an immediate is EXTR,
+`csetm` is CSINV, and `cmp` with an extended register is SUBS (extended register).
+LDURB and STURB run as LDRB and STRB with an unscaled offset
+([ADR 0010](decisions/0010-el0-and-system-calls.md)), and LDUR as LDR
+([ADR 0012](decisions/0012-instructions-for-capabilities.md)).
 
 ## System registers
 
