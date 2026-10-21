@@ -6,12 +6,16 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::gpio::Gpio;
-use crate::local::{self, Local};
+use crate::local::{Controller, Local};
 use crate::mailbox::{self, Mailbox, Request};
 use crate::pl011::Pl011;
+use crate::system_timer::SystemTimer;
 
 /// RAM occupies the bottom of the address space, up to the peripherals.
 const RAM_END: u64 = 0x3F00_0000;
+/// The BCM2835 system timer, and the size of its register window.
+const SYSTEM_TIMER_BASE: u64 = 0x3F00_3000;
+const SYSTEM_TIMER_WINDOW: u64 = 0x1C;
 /// The BCM2835 interrupt controller, and the size of its register window.
 const INTERRUPT_CONTROLLER_BASE: u64 = 0x3F00_B200;
 const INTERRUPT_CONTROLLER_WINDOW: u64 = 0x28;
@@ -90,6 +94,8 @@ pub struct Bus {
     uart: Pl011,
     mailbox: Mailbox,
     local: Local,
+    controller: Controller,
+    system_timer: SystemTimer,
 }
 
 impl Bus {
@@ -101,6 +107,8 @@ impl Bus {
             uart,
             mailbox: Mailbox::default(),
             local: Local::default(),
+            controller: Controller::default(),
+            system_timer: SystemTimer::default(),
         }
     }
 
@@ -150,6 +158,16 @@ impl Bus {
                 .read(offset)
                 .map(u64::from)
                 .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "interrupt controller", offset)) if size == 4 => self
+                .controller
+                .read(offset, self.device_levels())
+                .map(u64::from)
+                .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "system timer", offset)) if size == 4 => self
+                .system_timer
+                .read(offset)
+                .map(u64::from)
+                .ok_or(BusError::DeviceRegister { device, offset }),
             Some((device @ "mailbox", offset)) if size == 4 => self
                 .mailbox
                 .read(offset)
@@ -185,9 +203,14 @@ impl Bus {
                 .local
                 .write(offset, value as u32)
                 .ok_or(BusError::DeviceRegister { device, offset }),
-            Some((device @ "interrupt controller", offset)) if size == 4 => {
-                local::write_controller(offset).ok_or(BusError::DeviceRegister { device, offset })
-            }
+            Some((device @ "interrupt controller", offset)) if size == 4 => self
+                .controller
+                .write(offset, value as u32)
+                .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "system timer", offset)) if size == 4 => self
+                .system_timer
+                .write(offset, value as u32)
+                .ok_or(BusError::DeviceRegister { device, offset }),
             Some((device @ "mailbox", offset)) if size == 4 => {
                 match self.mailbox.write(offset, value as u32).map_err(BusError::Mailbox)? {
                     Some(Request::Property { address }) => self.answer_property(address),
@@ -204,9 +227,32 @@ impl Bus {
         self.local.set_virtual_timer(raised);
     }
 
+    /// Moves the devices on to the time when the core's counter reads `ticks`, and
+    /// raises or lowers the BCM2835 line to match (ADR 0017).
+    pub fn advance(&mut self, ticks: u64) {
+        self.system_timer.advance(ticks);
+        self.local.set_gpu(self.device_levels() & self.controller.enabled() != 0);
+    }
+
+    /// The device interrupts raised: only the system timer's.
+    fn device_levels(&self) -> u64 {
+        u64::from(self.system_timer.levels())
+    }
+
     /// Whether core 0 has an IRQ pending.
     pub fn irq_pending(&self) -> bool {
         self.local.irq_pending()
+    }
+
+    /// Whether core 0's virtual timer raises an IRQ once it fires.
+    pub fn virtual_timer_routed(&self) -> bool {
+        self.local.virtual_timer_routed()
+    }
+
+    /// The core's counter at which the next enabled device interrupt is raised, if
+    /// one ever will be.
+    pub fn next_device_interrupt(&self) -> Option<u64> {
+        self.system_timer.next_match(self.controller.enabled() as u32)
     }
 
     /// Answers the property message at `address` in RAM, as the firmware would.
@@ -238,6 +284,9 @@ impl Bus {
 
 /// Finds the device whose registers include `address`, and the offset within it.
 fn device_at(address: u64) -> Option<(&'static str, u64)> {
+    if (SYSTEM_TIMER_BASE..SYSTEM_TIMER_BASE + SYSTEM_TIMER_WINDOW).contains(&address) {
+        return Some(("system timer", address - SYSTEM_TIMER_BASE));
+    }
     let interrupt_controller =
         INTERRUPT_CONTROLLER_BASE..INTERRUPT_CONTROLLER_BASE + INTERRUPT_CONTROLLER_WINDOW;
     if interrupt_controller.contains(&address) {

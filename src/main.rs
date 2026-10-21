@@ -13,6 +13,7 @@ mod local;
 mod mailbox;
 mod mmu;
 mod pl011;
+mod system_timer;
 
 use std::io::Read;
 use std::process::ExitCode;
@@ -75,9 +76,9 @@ fn main() -> ExitCode {
             Ok(Step::Continue) => {}
             Ok(Step::Exit(code)) => return ExitCode::from(code as u8),
             Ok(Step::Asleep) => {
-                // Nothing in Nebu can send an event yet, so the core sleeps forever,
-                // as it would in QEMU.
-                eprintln!("nebu: core 0 is waiting for an event that nothing can send");
+                // Nothing in Nebu can send an event, or raise an interrupt that is not
+                // already due, so the core sleeps forever, as it would in QEMU.
+                eprintln!("nebu: core 0 is waiting for something that nothing can send");
                 eprintln!("nebu: press Ctrl-C to quit");
                 loop {
                     thread::park();

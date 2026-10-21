@@ -100,6 +100,7 @@ all addressing modes.
 | UDF                          | NeOS stage 1: exceptions test |
 | UMULH                        | NeOS stage 4: capabilities   |
 | WFE                          | NeOS step 2: parking cores   |
+| WFI                          | NeOS stage 6b: waiting for a driver's interrupt |
 
 Aliases are covered by the instruction they stand for: `mov` to or from SP is ADD
 (immediate), `mov` between registers is ORR (shifted register), `cmp` is SUBS,
@@ -158,6 +159,7 @@ CNTKCTL_EL1 = 0 makes them on hardware ([ADR 0016](decisions/0016-the-timer-and-
 | Data abort                 | 0x24, 0x25 | NeOS stage 2: MMU test |
 | Supervisor call (`svc`)    | 0x15  | NeOS stage 3: system calls |
 | IRQ, from the virtual timer | none | NeOS stage 6a: preemption |
+| IRQ, from the BCM2835 controller | none | NeOS stage 6b: drivers' interrupts |
 
 All are taken to EL1. Any other exception halts Nebu
 ([ADRs 0008](decisions/0008-exception-levels-and-exceptions.md),
@@ -183,7 +185,9 @@ the tables ([ADR 0009](decisions/0009-the-mmu.md)).
 | GPIO              | GPFSEL1, GPPUD, GPPUDCLK0 (read and write)        | NeOS step 3: routing the UART to the pins |
 | Mailbox           | Mailbox 0's READ and STATUS, mailbox 1's WRITE; channel 8 with the GET_ARM_MEMORY tag only ([ADR 0011](decisions/0011-the-firmware-mailbox.md)) | NeOS stage 4: how much memory there is |
 | Interrupt controller | DISABLE_IRQS_1, DISABLE_IRQS_2, DISABLE_BASIC_IRQS (write) at 0x3F00_B21C to 0x3F00_B224 | NeOS stage 6a: turning off what is not used |
-| Local peripherals | At 0x4000_0000: the local timer's control and core 0's mailbox interrupt control (write 0 only); core 0's timer interrupt control (0 or the virtual timer); core 0's IRQ source (read) ([ADR 0016](decisions/0016-the-timer-and-interrupts.md)) | NeOS stage 6a: the timer's interrupt |
+| Interrupt controller | IRQ_PENDING_1 and 2 (read: raised interrupts), FIQ control (write 0 only), ENABLE_IRQS_1 (write: interrupts 1 and 3 only) and ENABLE_IRQS_2 (write 0 only) ([ADR 0017](decisions/0017-device-interrupts-and-the-system-timer.md)) | NeOS stage 6b: drivers' interrupts |
+| Local peripherals | At 0x4000_0000: the GPU routing, the local timer's control and core 0's mailbox interrupt control (write 0 only); core 0's timer interrupt control (0 or the virtual timer); core 0's IRQ source (read: the virtual timer and the BCM2835 line) ([ADRs 0016](decisions/0016-the-timer-and-interrupts.md) and [0017](decisions/0017-device-interrupts-and-the-system-timer.md)) | NeOS stages 6a and 6b: interrupts |
+| System timer      | At 0x3F00_3000: CS (read; write 1 to clear), CLO and CHI (read), C0 to C3 (read and write); 1 MHz, from the core's counter ([ADR 0017](decisions/0017-device-interrupts-and-the-system-timer.md)) | NeOS stage 6b: the interrupt test |
 
 ## Semihosting
 

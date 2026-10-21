@@ -20,14 +20,15 @@ it. QEMU's `raspi3b` machine is the reference that both projects are checked aga
 
 ## Status
 
-Nebu runs NeOS up to stage 6a of its microkernel. It boots the kernel directly or
+Nebu runs NeOS up to stage 6b of its microkernel. It boots the kernel directly or
 through the NeOS chainloader, drops to EL1 with it, translates every access through
 the kernel's page tables, answers the kernel's question about memory through the
 firmware mailbox, runs the kernel's threads at EL0 with their system calls,
-preempts them with the virtual timer's interrupt, and takes the exceptions and
+preempts them with the virtual timer's interrupt, wakes its drivers with the
+system timer's, and takes the exceptions and
 aborts the kernel's tests raise. Its output matches QEMU's byte for byte, including
-the panic path and the kernel's fault reports. It currently implements 89 A64
-instructions, 27 system registers, six kinds of exception and five devices; see
+the panic path and the kernel's fault reports. It currently implements 90 A64
+instructions, 27 system registers, six kinds of exception and six devices; see
 [`docs/implemented.md`](docs/implemented.md).
 
 ## Building and running
@@ -70,6 +71,8 @@ nebu: stopped at pc 0x000801bc: cannot run instruction 0xd65f03c0: instruction n
 | `src/pl011.rs`   | The PL011 UART.                                         |
 | `src/gpio.rs`    | The GPIO controller's pin function registers.           |
 | `src/mailbox.rs` | The VideoCore mailbox and the firmware's answers.       |
+| `src/local.rs`   | The local block and the BCM2835 interrupt controller.   |
+| `src/system_timer.rs` | The BCM2835 system timer.                          |
 | `src/main.rs`    | Command-line handling and the run loop.                 |
 
 ## Licence
