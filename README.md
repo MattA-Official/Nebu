@@ -20,13 +20,13 @@ it. QEMU's `raspi3b` machine is the reference that both projects are checked aga
 
 ## Status
 
-Nebu runs NeOS up to stage 4 of its microkernel. It boots the kernel directly or
+Nebu runs NeOS up to stage 5a of its microkernel. It boots the kernel directly or
 through the NeOS chainloader, drops to EL1 with it, translates every access through
 the kernel's page tables, answers the kernel's question about memory through the
-firmware mailbox, runs the root task at EL0 with its system calls, and takes
+firmware mailbox, runs the kernel's threads at EL0 with their system calls, and takes
 the exceptions and aborts the kernel's tests raise. Its output matches QEMU's byte
 for byte, including the panic path and the kernel's fault reports. It currently
-implements 83 A64 instructions, 21 system registers, five kinds of exception and
+implements 88 A64 instructions, 22 system registers, five kinds of exception and
 three devices; see
 [`docs/implemented.md`](docs/implemented.md).
 

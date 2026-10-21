@@ -132,6 +132,8 @@ pub enum SystemRegister {
     CpacrEl1,
     /// The cache type register: among other things, the size of a cache line.
     CtrEl0,
+    /// EL0's thread pointer register, which EL0 can read and write.
+    TpidrEl0,
 }
 
 impl SystemRegister {
@@ -159,6 +161,7 @@ impl SystemRegister {
             (3, 0, 2, 0, 1) => SystemRegister::Ttbr1El1,
             (3, 0, 1, 0, 2) => SystemRegister::CpacrEl1,
             (3, 3, 0, 0, 1) => SystemRegister::CtrEl0,
+            (3, 3, 13, 0, 2) => SystemRegister::TpidrEl0,
             _ => return None,
         })
     }
@@ -187,6 +190,7 @@ impl SystemRegister {
             SystemRegister::Ttbr1El1 => "TTBR1_EL1",
             SystemRegister::CpacrEl1 => "CPACR_EL1",
             SystemRegister::CtrEl0 => "CTR_EL0",
+            SystemRegister::TpidrEl0 => "TPIDR_EL0",
         }
     }
 }
@@ -252,6 +256,10 @@ pub enum Instruction {
     /// EXTR: the `width` bits of `rn:rm` starting at bit `lsb`. 31 is the zero
     /// register.
     Extr { width: Width, rd: u8, rn: u8, rm: u8, lsb: u8 },
+    /// ADD (extended register): `rd = rn + (rm extended by `option`, shifted left by
+    /// `amount`)`. `rd` and `rn` 31 are SP, `rm` 31 is the zero register. `option` is
+    /// as for SUBS.
+    AddExtendedRegister { width: Width, rd: u8, rn: u8, rm: u8, option: u8, amount: u8 },
     /// SUBS (extended register): `rd = rn - (rm extended by `option`, shifted left
     /// by `amount`)`, setting the flags. `rd` 31 is the zero register, `rn` 31 is SP,
     /// `rm` 31 is the zero register. `option` is the field's value: UXTB, UXTH,
@@ -352,6 +360,8 @@ pub enum Instruction {
     DcCivac { rt: u8 },
     /// TLBI VMALLE1: invalidate every cached EL1&0 translation.
     TlbiVmalle1,
+    /// TLBI ASIDE1: invalidate the TLB entries for the ASID in bits 63 to 48 of `rt`.
+    TlbiAside1 { rt: u8 },
     /// MRS: read a system register into `rt`. 31 is the zero register.
     Mrs { rt: u8, register: SystemRegister },
     /// MSR (register): write `rt` to a system register. 31 is the zero register.
@@ -379,6 +389,9 @@ pub enum Instruction {
     /// STRB (immediate): store the low 8 bits of `rt`.
     /// `rn` 31 is SP, `rt` 31 the zero register.
     StrbImmediate { rt: u8, rn: u8, index: Index, offset: i64 },
+    /// LDRH (immediate): load a halfword into `rt`, zero-extended.
+    /// `rn` 31 is SP, `rt` 31 the zero register.
+    LdrhImmediate { rt: u8, rn: u8, index: Index, offset: i64 },
     /// STRH (immediate): store the low 16 bits of `rt`.
     /// `rn` 31 is SP, `rt` 31 the zero register.
     StrhImmediate { rt: u8, rn: u8, index: Index, offset: i64 },
@@ -700,6 +713,7 @@ fn system(word: u32) -> Result<Instruction, DecodeError> {
         (0, 1, _, _) => match (op1, crn, crm, op2, rt) {
             (0, 7, 5, 0, 31) => Ok(Instruction::IcIallu),
             (0, 8, 7, 0, 31) => Ok(Instruction::TlbiVmalle1),
+            (0, 8, 7, 2, rt) => Ok(Instruction::TlbiAside1 { rt }),
             (3, 7, 14, 1, rt) => Ok(Instruction::DcCivac { rt }),
             _ => Err(DecodeError::Unimplemented),
         },
@@ -780,9 +794,9 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
                         let width = Width::from_bit(size & 1);
                         Ok(Instruction::Stur { width, rt, rn, offset })
                     }
-                    // LDUR, STURB and LDURB do what LDR, STRB and LDRB with an offset
-                    // do, so they share their variants. Only the encoding of the offset
-                    // differs.
+                    // LDUR, STURB, LDURB, STURH and LDURH do what LDR, STRB, LDRB, STRH
+                    // and LDRH with an offset do, so they share their variants. Only the
+                    // encoding of the offset differs.
                     (0b10 | 0b11, 0b01) => {
                         let width = Width::from_bit(size & 1);
                         Ok(Instruction::LdrImmediate {
@@ -799,7 +813,13 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
                     (0b00, 0b01) => {
                         Ok(Instruction::LdrbImmediate { rt, rn, index: Index::Offset, offset })
                     }
-                    _ => Err(DecodeError::Unimplemented), // STURH, LDURH and sign-extending
+                    (0b01, 0b00) => {
+                        Ok(Instruction::StrhImmediate { rt, rn, index: Index::Offset, offset })
+                    }
+                    (0b01, 0b01) => {
+                        Ok(Instruction::LdrhImmediate { rt, rn, index: Index::Offset, offset })
+                    }
+                    _ => Err(DecodeError::Unimplemented), // sign-extending loads
                 };
             }
             (0b00, 0, 0b01) => (Index::Post, sign_extend(bits(word, 20, 12), 9)),
@@ -841,6 +861,7 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
             (0b00, 0b00) => Ok(Instruction::StrbImmediate { rt, rn, index, offset }),
             (0b00, 0b01) => Ok(Instruction::LdrbImmediate { rt, rn, index, offset }),
             (0b01, 0b00) => Ok(Instruction::StrhImmediate { rt, rn, index, offset }),
+            (0b01, 0b01) => Ok(Instruction::LdrhImmediate { rt, rn, index, offset }),
             (0b10 | 0b11, 0b00) => {
                 let width = Width::from_bit(size & 1);
                 Ok(Instruction::StrImmediate { width, rt, rn, index, offset })
@@ -931,7 +952,7 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
         };
     }
 
-    // Add/subtract (extended register). Only SUBS.
+    // Add/subtract (extended register). Only ADD and SUBS.
     if bits(word, 28, 21) == 0b0101_1001 {
         let width = Width::from_bit(bits(word, 31, 31));
         let (option, amount) = (bits(word, 15, 13) as u8, bits(word, 12, 10) as u8);
@@ -940,8 +961,9 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
         }
         let (rd, rn, rm) = (reg(word, 0), reg(word, 5), reg(word, 16));
         return match bits(word, 30, 29) {
+            0b00 => Ok(Instruction::AddExtendedRegister { width, rd, rn, rm, option, amount }),
             0b11 => Ok(Instruction::SubsExtendedRegister { width, rd, rn, rm, option, amount }),
-            _ => Err(DecodeError::Unimplemented), // ADD, ADDS, SUB
+            _ => Err(DecodeError::Unimplemented), // ADDS and SUB
         };
     }
 
@@ -1143,6 +1165,22 @@ const CONDITIONS: [&str; 16] = [
     "eq", "ne", "hs", "lo", "mi", "pl", "vs", "vc", "hi", "ls", "ge", "lt", "gt", "le", "al", "nv",
 ];
 
+/// An extended register operand, as ADD and SUBS (extended register) write it.
+struct Extended {
+    rm: u8,
+    option: u8,
+    amount: u8,
+}
+
+impl fmt::Display for Extended {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const EXTENDS: [&str; 8] = ["uxtb", "uxth", "uxtw", "uxtx", "sxtb", "sxth", "sxtw", "sxtx"];
+        // The extended register is a W register unless it is UXTX or SXTX.
+        let source = if self.option & 0b11 == 0b11 { Width::W64 } else { Width::W32 };
+        write!(f, "{}, {} #{}", zr(self.rm, source), EXTENDS[usize::from(self.option)], self.amount)
+    }
+}
+
 impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use Instruction::*;
@@ -1210,20 +1248,20 @@ impl fmt::Display for Instruction {
             Extr { width, rd, rn, rm, lsb } => {
                 write!(f, "extr {}, {}, {}, #{lsb}", zr(rd, width), zr(rn, width), zr(rm, width))
             }
-            SubsExtendedRegister { width, rd, rn, rm, option, amount } => {
-                const EXTENDS: [&str; 8] =
-                    ["uxtb", "uxth", "uxtw", "uxtx", "sxtb", "sxth", "sxtw", "sxtx"];
-                // The extended register is a W register unless it is UXTX or SXTX.
-                let source = if option & 0b11 == 0b11 { Width::W64 } else { Width::W32 };
-                write!(
-                    f,
-                    "subs {}, {}, {}, {} #{amount}",
-                    zr(rd, width),
-                    sp(rn, width),
-                    zr(rm, source),
-                    EXTENDS[usize::from(option)]
-                )
-            }
+            AddExtendedRegister { width, rd, rn, rm, option, amount } => write!(
+                f,
+                "add {}, {}, {}",
+                sp(rd, width),
+                sp(rn, width),
+                Extended { rm, option, amount }
+            ),
+            SubsExtendedRegister { width, rd, rn, rm, option, amount } => write!(
+                f,
+                "subs {}, {}, {}",
+                zr(rd, width),
+                sp(rn, width),
+                Extended { rm, option, amount }
+            ),
             Sbc { width, rd, rn, rm } => {
                 write!(f, "sbc {}, {}, {}", zr(rd, width), zr(rn, width), zr(rm, width))
             }
@@ -1368,6 +1406,7 @@ impl fmt::Display for Instruction {
             IcIallu => write!(f, "ic iallu"),
             DcCivac { rt } => write!(f, "dc civac, {}", zr(rt, Width::W64)),
             TlbiVmalle1 => write!(f, "tlbi vmalle1"),
+            TlbiAside1 { rt } => write!(f, "tlbi aside1, {}", zr(rt, Width::W64)),
             Mrs { rt, register } => write!(f, "mrs {}, {}", zr(rt, Width::W64), register.name()),
             Msr { register, rt } => write!(f, "msr {}, {}", register.name(), zr(rt, Width::W64)),
             LdrLiteral { width, rt, offset } => {
@@ -1419,6 +1458,9 @@ impl fmt::Display for Instruction {
             }
             StrbImmediate { rt, rn, index, offset } => {
                 write!(f, "strb {}, {}", zr(rt, Width::W32), Address { rn, index, offset })
+            }
+            LdrhImmediate { rt, rn, index, offset } => {
+                write!(f, "ldrh {}, {}", zr(rt, Width::W32), Address { rn, index, offset })
             }
             StrhImmediate { rt, rn, index, offset } => {
                 write!(f, "strh {}, {}", zr(rt, Width::W32), Address { rn, index, offset })
@@ -1535,6 +1577,11 @@ mod tests {
             (0x3868694c, LdrbRegister { rt: 12, rn: 10, rm: 8, extend: Extend::Lsl }),
             (0x3840140b, LdrbImmediate { rt: 11, rn: 0, index: Index::Post, offset: 1 }),
             (0x790053e8, StrhImmediate { rt: 8, rn: 31, index: Index::Offset, offset: 0x28 }),
+            (0x79402108, LdrhImmediate { rt: 8, rn: 8, index: Index::Offset, offset: 16 }),
+            (0x78402420, LdrhImmediate { rt: 0, rn: 1, index: Index::Post, offset: 2 }),
+            (0x785fec20, LdrhImmediate { rt: 0, rn: 1, index: Index::Pre, offset: -2 }),
+            (0x784242cc, LdrhImmediate { rt: 12, rn: 22, index: Index::Offset, offset: 0x24 }),
+            (0x780222c9, StrhImmediate { rt: 9, rn: 22, index: Index::Offset, offset: 0x22 }),
             (
                 0xf9400009,
                 LdrImmediate { width: W64, rt: 9, rn: 0, index: Index::Offset, offset: 0 },
@@ -1600,6 +1647,9 @@ mod tests {
             // Stage 4: asking the firmware about memory.
             (0xd53b0028, Mrs { rt: 8, register: SystemRegister::CtrEl0 }),
             (0xd50b7e28, DcCivac { rt: 8 }),
+            (0xd5088748, TlbiAside1 { rt: 8 }),
+            (0xd51bd048, Msr { register: SystemRegister::TpidrEl0, rt: 8 }),
+            (0xd53bd048, Mrs { rt: 8, register: SystemRegister::TpidrEl0 }),
             (0xb2400421, OrrImmediate { width: W64, rd: 1, rn: 1, imm: 0b11 }),
             (0xb5001f49, Cbnz { width: W64, rt: 9, offset: 0x3e8 }),
             (0x1a8b310a, Csel { width: W32, rd: 10, rn: 8, rm: 11, condition: 0b0011 }),
@@ -1659,6 +1709,11 @@ mod tests {
             ),
             (0xfa1f01ad, Sbcs { width: W64, rd: 13, rn: 13, rm: 31 }),
             (0xda1f0130, Sbc { width: W64, rd: 16, rn: 9, rm: 31 }),
+            // Stage 5a: threads.
+            (
+                0x8b30212e,
+                AddExtendedRegister { width: W64, rd: 14, rn: 9, rm: 16, option: 1, amount: 0 },
+            ),
             (0xba490962, CcmnImmediate { width: W64, rn: 11, imm: 9, nzcv: 2, condition: 0 }),
             (
                 0xf85f016e,
@@ -1733,6 +1788,9 @@ mod tests {
         assert_eq!(decode(0x9aca216a).unwrap().to_string(), "lslv x10, x11, x10");
         assert_eq!(decode(0xf86a698a).unwrap().to_string(), "ldr x10, [x12, x10, lsl #0]");
         assert_eq!(decode(0xd508871f).unwrap().to_string(), "tlbi vmalle1");
+        assert_eq!(decode(0xd5088748).unwrap().to_string(), "tlbi aside1, x8");
+        assert_eq!(decode(0x79402108).unwrap().to_string(), "ldrh w8, [x8, #0x10]");
+        assert_eq!(decode(0xd51bd048).unwrap().to_string(), "msr TPIDR_EL0, x8");
         assert_eq!(decode(0xd50b7e28).unwrap().to_string(), "dc civac, x8");
         assert_eq!(decode(0x7a572060).unwrap().to_string(), "ccmp w3, w23, #0x0, hs");
         assert_eq!(decode(0xfa4008a4).unwrap().to_string(), "ccmp x5, #0x0, #0x4, eq");
