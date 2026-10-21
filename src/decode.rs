@@ -382,6 +382,10 @@ pub enum Instruction {
     /// `amount` is 0 or log2 of the access size. `rn` 31 is SP; `rt` and `rm` 31 the
     /// zero register.
     LdrRegister { width: Width, rt: u8, rn: u8, rm: u8, extend: Extend, amount: u8 },
+    /// LDRSW (register): load a word from `rn + (rm extended, shifted by `amount`)`
+    /// into `rt`, sign-extended to 64 bits. `amount` is 0 or 2. `rn` 31 is SP; `rt`
+    /// and `rm` 31 the zero register.
+    LdrswRegister { rt: u8, rn: u8, rm: u8, extend: Extend, amount: u8 },
     /// STR (register): store `rt` to `rn + (rm extended, shifted by `amount`)`.
     /// `amount` is 0 or log2 of the access size. `rn` 31 is SP; `rt` and `rm` 31 the
     /// zero register.
@@ -847,6 +851,11 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
                         } else {
                             Instruction::StrRegister { width, rt, rn, rm, extend, amount }
                         })
+                    }
+                    (0b10, 0b10) => {
+                        let amount = if bits(word, 12, 12) == 1 { 2 } else { 0 };
+                        let rm = reg(word, 16);
+                        Ok(Instruction::LdrswRegister { rt, rn, rm, extend, amount })
                     }
                     _ => Err(DecodeError::Unimplemented),
                 };
@@ -1431,6 +1440,16 @@ impl fmt::Display for Instruction {
                     zr(rm, rm_width)
                 )
             }
+            LdrswRegister { rt, rn, rm, extend, amount } => {
+                let (name, rm_width) = extend_name(extend);
+                write!(
+                    f,
+                    "ldrsw {}, [{}, {}, {name} #{amount}]",
+                    zr(rt, Width::W64),
+                    sp(rn, Width::W64),
+                    zr(rm, rm_width)
+                )
+            }
             StrRegister { width, rt, rn, rm, extend, amount } => {
                 let (name, rm_width) = extend_name(extend);
                 write!(
@@ -1575,6 +1594,7 @@ mod tests {
                 },
             ),
             (0x3868694c, LdrbRegister { rt: 12, rn: 10, rm: 8, extend: Extend::Lsl }),
+            (0xb8a0794c, LdrswRegister { rt: 12, rn: 10, rm: 0, extend: Extend::Lsl, amount: 2 }),
             (0x3840140b, LdrbImmediate { rt: 11, rn: 0, index: Index::Post, offset: 1 }),
             (0x790053e8, StrhImmediate { rt: 8, rn: 31, index: Index::Offset, offset: 0x28 }),
             (0x79402108, LdrhImmediate { rt: 8, rn: 8, index: Index::Offset, offset: 16 }),
@@ -1787,6 +1807,7 @@ mod tests {
         assert_eq!(decode(0x1a8b310a).unwrap().to_string(), "csel w10, w8, w11, lo");
         assert_eq!(decode(0x9aca216a).unwrap().to_string(), "lslv x10, x11, x10");
         assert_eq!(decode(0xf86a698a).unwrap().to_string(), "ldr x10, [x12, x10, lsl #0]");
+        assert_eq!(decode(0xb8a0794c).unwrap().to_string(), "ldrsw x12, [x10, x0, lsl #2]");
         assert_eq!(decode(0xd508871f).unwrap().to_string(), "tlbi vmalle1");
         assert_eq!(decode(0xd5088748).unwrap().to_string(), "tlbi aside1, x8");
         assert_eq!(decode(0x79402108).unwrap().to_string(), "ldrh w8, [x8, #0x10]");

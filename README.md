@@ -26,7 +26,7 @@ the kernel's page tables, answers the kernel's question about memory through the
 firmware mailbox, runs the kernel's threads at EL0 with their system calls, and takes
 the exceptions and aborts the kernel's tests raise. Its output matches QEMU's byte
 for byte, including the panic path and the kernel's fault reports. It currently
-implements 88 A64 instructions, 22 system registers, five kinds of exception and
+implements 89 A64 instructions, 22 system registers, five kinds of exception and
 three devices; see
 [`docs/implemented.md`](docs/implemented.md).
 
