@@ -56,6 +56,7 @@ all addressing modes.
 | LDRB (immediate)             | NeOS step 2: panic path      |
 | LDRB (register)              | NeOS step 2: panic path      |
 | LDRH (immediate)             | NeOS stage 5a: ASIDs         |
+| LDRSW (register)             | NeOS stage 5b: the ipc test's jump tables |
 | LDUR                         | NeOS stage 4: reading the boot info |
 | LDURB                        | NeOS stage 3: loading the root task |
 | LDURH                        | NeOS stage 5a: ASIDs         |

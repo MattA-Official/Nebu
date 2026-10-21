@@ -887,6 +887,12 @@ impl Cpu {
                 let value = self.load(bus, address, width.bytes())?;
                 self.write(rt, width, value);
             }
+            LdrswRegister { rt, rn, rm, extend, amount } => {
+                let offset = self.extend_register(rm, extend) << amount;
+                let address = self.base(rn)?.wrapping_add(offset);
+                let value = self.load(bus, address, 4)?;
+                self.write(rt, Width::W64, value as u32 as i32 as i64 as u64);
+            }
             StrRegister { width, rt, rn, rm, extend, amount } => {
                 let offset = self.extend_register(rm, extend) << amount;
                 let address = self.base(rn)?.wrapping_add(offset);
@@ -1214,6 +1220,20 @@ mod tests {
         (cpu.x[1], cpu.x[2]) = (0xFFFF_FFFF_0000_0001, 3);
         cpu.step(&mut bus, false).unwrap();
         assert_eq!(cpu.x[0], 0xFFFF_FFFD);
+    }
+
+    #[test]
+    fn ldrsw_sign_extends_the_word_it_loads() {
+        // ldrsw x12, [x10, x0, lsl #2], loading the second word of a table.
+        for (word, expected) in [(0xFFFF_FFFEu32, 0xFFFF_FFFF_FFFF_FFFE), (7, 7)] {
+            let mut bus = Bus::new(uart());
+            bus.load(0x80000, &0xb8a0794cu32.to_le_bytes()).unwrap();
+            bus.load(0x90004, &word.to_le_bytes()).unwrap();
+            let mut cpu = Cpu::new(0x80000, false);
+            (cpu.x[10], cpu.x[0]) = (0x90000, 1);
+            cpu.step(&mut bus, false).unwrap();
+            assert_eq!(cpu.x[12], expected);
+        }
     }
 
     #[test]
