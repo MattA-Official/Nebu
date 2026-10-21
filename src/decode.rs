@@ -400,6 +400,12 @@ pub enum Instruction {
     /// LDRB (register): load a byte from `rn + (rm extended)` into `rt`.
     /// `rn` 31 is SP; `rt` and `rm` 31 the zero register.
     LdrbRegister { rt: u8, rn: u8, rm: u8, extend: Extend },
+    /// STRB (register): store the low byte of `rt` to `rn + (rm extended)`.
+    /// `rn` 31 is SP; `rt` and `rm` 31 the zero register.
+    StrbRegister { rt: u8, rn: u8, rm: u8, extend: Extend },
+    /// LDRSB (register): load a byte from `rn + (rm extended)` into `rt`,
+    /// sign-extended to `width`. `rn` 31 is SP; `rt` and `rm` 31 the zero register.
+    LdrsbRegister { width: Width, rt: u8, rn: u8, rm: u8, extend: Extend },
     /// LDR (register): load `rt` from `rn + (rm extended, shifted by `amount`)`.
     /// `amount` is 0 or log2 of the access size. `rn` 31 is SP; `rt` and `rm` 31 the
     /// zero register.
@@ -864,6 +870,14 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
                     // For a byte access the shift amount is always zero, whatever S says.
                     (0b00, 0b01) => {
                         Ok(Instruction::LdrbRegister { rt, rn, rm: reg(word, 16), extend })
+                    }
+                    (0b00, 0b00) => {
+                        Ok(Instruction::StrbRegister { rt, rn, rm: reg(word, 16), extend })
+                    }
+                    // opc 0b10 sign-extends to 64 bits, and 0b11 to 32.
+                    (0b00, 0b10 | 0b11) => {
+                        let width = Width::from_bit(!opc & 1);
+                        Ok(Instruction::LdrsbRegister { width, rt, rn, rm: reg(word, 16), extend })
                     }
                     (0b10 | 0b11, 0b00 | 0b01) => {
                         let width = Width::from_bit(size & 1);
@@ -1484,7 +1498,18 @@ impl fmt::Display for Instruction {
                     zr(rm, rm_width)
                 )
             }
-            LdrbRegister { rt, rn, rm, extend } => {
+            LdrsbRegister { width, rt, rn, rm, extend } => {
+                let (name, rm_width) = extend_name(extend);
+                write!(
+                    f,
+                    "ldrsb {}, [{}, {}, {name} #0]",
+                    zr(rt, width),
+                    sp(rn, Width::W64),
+                    zr(rm, rm_width)
+                )
+            }
+            LdrbRegister { rt, rn, rm, extend } | StrbRegister { rt, rn, rm, extend } => {
+                let mnemonic = if matches!(self, LdrbRegister { .. }) { "ldrb" } else { "strb" };
                 let (name, width) = match extend {
                     Extend::Uxtw => ("uxtw", Width::W32),
                     Extend::Lsl => ("lsl", Width::W64),
@@ -1493,7 +1518,7 @@ impl fmt::Display for Instruction {
                 };
                 write!(
                     f,
-                    "ldrb {}, [{}, {}, {name} #0]",
+                    "{mnemonic} {}, [{}, {}, {name} #0]",
                     zr(rt, Width::W32),
                     sp(rn, Width::W64),
                     zr(rm, width)
@@ -1618,6 +1643,9 @@ mod tests {
                 },
             ),
             (0x3868694c, LdrbRegister { rt: 12, rn: 10, rm: 8, extend: Extend::Lsl }),
+            (0x382b6b0a, StrbRegister { rt: 10, rn: 24, rm: 11, extend: Extend::Lsl }),
+            (0x38e9680d, LdrsbRegister { width: W32, rt: 13, rn: 0, rm: 9, extend: Extend::Lsl }),
+            (0x38a9680d, LdrsbRegister { width: W64, rt: 13, rn: 0, rm: 9, extend: Extend::Lsl }),
             (0xb8a0794c, LdrswRegister { rt: 12, rn: 10, rm: 0, extend: Extend::Lsl, amount: 2 }),
             (0x3840140b, LdrbImmediate { rt: 11, rn: 0, index: Index::Post, offset: 1 }),
             (0x790053e8, StrhImmediate { rt: 8, rn: 31, index: Index::Offset, offset: 0x28 }),

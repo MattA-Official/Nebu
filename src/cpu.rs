@@ -922,7 +922,7 @@ impl Cpu {
                 self.translate(bus, self.read(rt, Width::W64), Access::Read)?;
             }
             // WFI waits for an interrupt to be pending, even a masked one. Nebu skips
-            // straight to the next one due (ADR 0017).
+            // straight to the next one due (ADR 0017), or waits for input (ADR 0018).
             Wfi if self.el == 0 => {
                 return Err(Fault::Unsupported("wfi at EL0").into());
             }
@@ -936,6 +936,9 @@ impl Cpu {
                     // The next step counts one more, and finds the interrupt raised.
                     // A deadline that has passed is already due.
                     Some(due) => self.count = self.count.max(due.saturating_sub(1)),
+                    // With nothing due, only input to the UART can wake the core
+                    // (ADR 0018).
+                    None if bus.wait_for_input() => {}
                     None => result = Step::Asleep,
                 }
             }
@@ -984,6 +987,15 @@ impl Cpu {
                 let address = self.base(rn)?.wrapping_add(self.extend_register(rm, extend));
                 let value = self.load(bus, address, 1)?;
                 self.write(rt, Width::W32, value);
+            }
+            StrbRegister { rt, rn, rm, extend } => {
+                let address = self.base(rn)?.wrapping_add(self.extend_register(rm, extend));
+                self.store(bus, address, 1, self.read(rt, Width::W32))?;
+            }
+            LdrsbRegister { width, rt, rn, rm, extend } => {
+                let address = self.base(rn)?.wrapping_add(self.extend_register(rm, extend));
+                let value = self.load(bus, address, 1)?;
+                self.write(rt, width, value as u8 as i8 as i64 as u64);
             }
             LdrRegister { width, rt, rn, rm, extend, amount } => {
                 let offset = self.extend_register(rm, extend) << amount;
@@ -1338,6 +1350,33 @@ mod tests {
             cpu.step(&mut bus, false).unwrap();
             assert_eq!(cpu.x[12], expected);
         }
+    }
+
+    #[test]
+    fn ldrsb_sign_extends_the_byte_it_loads() {
+        // ldrsb w13, [x0, x9] and ldrsb x13, [x0, x9].
+        for (instruction, expected) in [(0x38e9680du32, 0xFFFF_FF80), (0x38a9680d, u64::MAX - 0x7F)]
+        {
+            let mut bus = Bus::new(uart());
+            bus.load(0x80000, &instruction.to_le_bytes()).unwrap();
+            bus.load(0x90003, &[0x80]).unwrap();
+            let mut cpu = Cpu::new(0x80000, false);
+            (cpu.x[0], cpu.x[9], cpu.x[13]) = (0x90000, 3, u64::MAX);
+            cpu.step(&mut bus, false).unwrap();
+            assert_eq!(cpu.x[13], expected);
+        }
+    }
+
+    #[test]
+    fn strb_register_stores_the_low_byte() {
+        // strb w10, [x24, x11].
+        let mut bus = Bus::new(uart());
+        bus.load(0x80000, &0x382b6b0au32.to_le_bytes()).unwrap();
+        let mut cpu = Cpu::new(0x80000, false);
+        (cpu.x[10], cpu.x[24], cpu.x[11]) = (0x1234, 0x90000, 5);
+        cpu.step(&mut bus, false).unwrap();
+        assert_eq!(bus.read(0x90005, 1).unwrap(), 0x34);
+        assert_eq!(bus.read(0x90006, 1).unwrap(), 0);
     }
 
     #[test]

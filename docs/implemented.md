@@ -56,6 +56,7 @@ all addressing modes.
 | LDRB (immediate)             | NeOS step 2: panic path      |
 | LDRB (register)              | NeOS step 2: panic path      |
 | LDRH (immediate)             | NeOS stage 5a: ASIDs         |
+| LDRSB (register)             | NeOS stage 7: checking UTF-8 ([ADR 0018](decisions/0018-the-uarts-interrupts.md)) |
 | LDRSW (register)             | NeOS stage 5b: the ipc test's jump tables |
 | LDUR                         | NeOS stage 4: reading the boot info |
 | LDURB                        | NeOS stage 3: loading the root task |
@@ -82,6 +83,7 @@ all addressing modes.
 | STR (immediate)              | NeOS step 2: boot            |
 | STR (register)               | NeOS stage 2: MMU            |
 | STRB (immediate)             | NeOS step 3: storing the kernel |
+| STRB (register)              | NeOS stage 7: the console's buffers ([ADR 0018](decisions/0018-the-uarts-interrupts.md)) |
 | STRH (immediate)             | NeOS step 2: panic path      |
 | STUR                         | NeOS step 2: boot            |
 | STURB                        | NeOS stage 3: loading the root task |
@@ -182,10 +184,11 @@ the tables ([ADR 0009](decisions/0009-the-mmu.md)).
 | RAM               | 0x0000_0000 to 0x3F00_0000                        | NeOS step 2: boot  |
 | PL011 UART        | DR (write), FR (read), ICR (write); IBRD, FBRD, LCRH, CR, IMSC (read and write) | NeOS step 2: console |
 | PL011 UART        | DR (read): received bytes, from standard input    | NeOS step 3: chainloader |
+| PL011 UART        | IFLS (read and write), RIS and MIS (read); the receive and transmit interrupts, as QEMU raises them; IMSC accepts only them and the receive timeout ([ADR 0018](decisions/0018-the-uarts-interrupts.md)) | NeOS stage 7: the serial driver |
 | GPIO              | GPFSEL1, GPPUD, GPPUDCLK0 (read and write)        | NeOS step 3: routing the UART to the pins |
 | Mailbox           | Mailbox 0's READ and STATUS, mailbox 1's WRITE; channel 8 with the GET_ARM_MEMORY tag only ([ADR 0011](decisions/0011-the-firmware-mailbox.md)) | NeOS stage 4: how much memory there is |
 | Interrupt controller | DISABLE_IRQS_1, DISABLE_IRQS_2, DISABLE_BASIC_IRQS (write) at 0x3F00_B21C to 0x3F00_B224 | NeOS stage 6a: turning off what is not used |
-| Interrupt controller | IRQ_PENDING_1 and 2 (read: raised interrupts), FIQ control (write 0 only), ENABLE_IRQS_1 (write: interrupts 1 and 3 only) and ENABLE_IRQS_2 (write 0 only) ([ADR 0017](decisions/0017-device-interrupts-and-the-system-timer.md)) | NeOS stage 6b: drivers' interrupts |
+| Interrupt controller | IRQ_PENDING_1 and 2 (read: raised interrupts), FIQ control (write 0 only), ENABLE_IRQS_1 (write: interrupts 1 and 3 only) and ENABLE_IRQS_2 (write: interrupt 57, the UART's, only) ([ADRs 0017](decisions/0017-device-interrupts-and-the-system-timer.md) and [0018](decisions/0018-the-uarts-interrupts.md)) | NeOS stages 6b and 7: drivers' interrupts |
 | Local peripherals | At 0x4000_0000: the GPU routing, the local timer's control and core 0's mailbox interrupt control (write 0 only); core 0's timer interrupt control (0 or the virtual timer); core 0's IRQ source (read: the virtual timer and the BCM2835 line) ([ADRs 0016](decisions/0016-the-timer-and-interrupts.md) and [0017](decisions/0017-device-interrupts-and-the-system-timer.md)) | NeOS stages 6a and 6b: interrupts |
 | System timer      | At 0x3F00_3000: CS (read; write 1 to clear), CLO and CHI (read), C0 to C3 (read and write); 1 MHz, from the core's counter ([ADR 0017](decisions/0017-device-interrupts-and-the-system-timer.md)) | NeOS stage 6b: the interrupt test |
 
