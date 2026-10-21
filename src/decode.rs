@@ -308,6 +308,9 @@ pub enum Instruction {
     /// LSLV and LSRV: `rd = rn` shifted by `rm` modulo the register width. `shift` is
     /// only ever `Lsl` or `Lsr`. 31 is the zero register.
     ShiftVariable { width: Width, rd: u8, rn: u8, rm: u8, shift: Shift },
+    /// UDIV: `rd` = `rn` / `rm`, unsigned, rounded towards zero, and 0 if `rm` is 0.
+    /// 31 is the zero register.
+    Udiv { width: Width, rd: u8, rn: u8, rm: u8 },
     /// CSEL: `rd = if condition holds { rn } else { rm }`. 31 is the zero register.
     Csel { width: Width, rd: u8, rn: u8, rm: u8, condition: u8 },
     /// MADD: `rd = ra + rn * rm`, keeping the low bits. 31 is the zero register.
@@ -1040,9 +1043,10 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
         let width = Width::from_bit(bits(word, 31, 31));
         let (rd, rn, rm) = (reg(word, 0), reg(word, 5), reg(word, 16));
         return match bits(word, 15, 10) {
+            0b00_0010 => Ok(Instruction::Udiv { width, rd, rn, rm }),
             0b00_1000 => Ok(Instruction::ShiftVariable { width, rd, rn, rm, shift: Shift::Lsl }),
             0b00_1001 => Ok(Instruction::ShiftVariable { width, rd, rn, rm, shift: Shift::Lsr }),
-            _ => Err(DecodeError::Unimplemented), // ASRV, RORV, division, CRC32 and others
+            _ => Err(DecodeError::Unimplemented), // SDIV, ASRV, RORV, CRC32 and others
         };
     }
 
@@ -1290,6 +1294,9 @@ impl fmt::Display for Instruction {
                 ShiftedRegister { name: "sub", width, rd, rn, rm, shift, amount }.fmt(f)
             }
             Rbit { width, rd, rn } => write!(f, "rbit {}, {}", zr(rd, width), zr(rn, width)),
+            Udiv { width, rd, rn, rm } => {
+                write!(f, "udiv {}, {}, {}", zr(rd, width), zr(rn, width), zr(rm, width))
+            }
             Clz { width, rd, rn } => write!(f, "clz {}, {}", zr(rd, width), zr(rn, width)),
             Extr { width, rd, rn, rm, lsb } => {
                 write!(f, "extr {}, {}, {}, #{lsb}", zr(rd, width), zr(rn, width), zr(rm, width))
@@ -1827,6 +1834,8 @@ mod tests {
                 0xb829690a,
                 StrRegister { width: W32, rt: 10, rn: 8, rm: 9, extend: Extend::Lsl, amount: 0 },
             ),
+            (0x1ac8092a, Udiv { width: W32, rd: 10, rn: 9, rm: 8 }),
+            (0x9ac80929, Udiv { width: W64, rd: 9, rn: 9, rm: 8 }),
             (0x9aca216a, ShiftVariable { width: W64, rd: 10, rn: 11, rm: 10, shift: Shift::Lsl }),
             (0x9acc252c, ShiftVariable { width: W64, rd: 12, rn: 9, rm: 12, shift: Shift::Lsr }),
             (

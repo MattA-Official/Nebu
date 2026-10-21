@@ -19,6 +19,8 @@ const MPIDR_CORE_0: u64 = 0x8000_0000;
 /// The rate the generic timer's counter counts at: 62.5 MHz, as QEMU's `raspi3b`
 /// reports in CNTFRQ_EL0 (ADR 0016).
 const COUNTER_FREQUENCY: u64 = 62_500_000;
+/// CNTKCTL_EL1's bit that lets EL0 read CNTVCT_EL0 and CNTFRQ_EL0 (ADR 0019).
+const CNTKCTL_EL0VCTEN: u64 = 1 << 1;
 /// CNTV_CTL_EL0's bits: ENABLE, IMASK, and ISTATUS, which only reads.
 const CNTV_CTL_ENABLE: u64 = 1 << 0;
 const CNTV_CTL_IMASK: u64 = 1 << 1;
@@ -132,6 +134,7 @@ struct SystemRegisters {
     spsr_el2: u64,
     elr_el2: u64,
     cpacr_el1: u64,
+    cntkctl_el1: u64,
     tpidr_el0: u64,
     cntv_ctl_el0: u64,
     cntv_cval_el0: u64,
@@ -345,15 +348,19 @@ impl Cpu {
     }
 
     /// The lowest exception level that may access `register`.
-    fn minimum_el(register: SystemRegister) -> u8 {
+    fn minimum_el(&self, register: SystemRegister) -> u8 {
         use SystemRegister::*;
         match register {
+            // EL0 may read the counter and its frequency when CNTKCTL_EL1.EL0VCTEN is
+            // set (NeOS ADR 0028).
+            CntfrqEl0 | CntvctEl0 if self.sys.cntkctl_el1 & CNTKCTL_EL0VCTEN != 0 => 0,
             MpidrEl1 | CurrentEl | SctlrEl1 | SpsrEl1 | ElrEl1 | SpEl0 | EsrEl1 | FarEl1
             | VbarEl1 | TcrEl1 | MairEl1 | Ttbr0El1 | Ttbr1El1 | CpacrEl1 => 1,
             // EL0 can read it only when SCTLR_EL1.UCT is set, which Nebu does not allow.
             CtrEl0 => 1,
             TpidrEl0 => 0,
-            // EL0 can reach them only as CNTKCTL_EL1 allows, and Nebu allows only 0.
+            // EL0 can reach them only as CNTKCTL_EL1 allows, and Nebu allows only the
+            // counter and its frequency.
             CntfrqEl0 | CntvctEl0 | CntvCtlEl0 | CntvCvalEl0 => 1,
             CntkctlEl1 => 1,
             HcrEl2 | CnthctlEl2 | CntvoffEl2 | SpsrEl2 | ElrEl2 | SpEl1 => 2,
@@ -362,7 +369,7 @@ impl Cpu {
 
     /// MRS: reads a system register.
     fn read_system_register(&self, register: SystemRegister) -> Result<u64, Fault> {
-        if self.el < Self::minimum_el(register) {
+        if self.el < self.minimum_el(register) {
             return Err(Fault::SystemRegisterAccess { register, el: self.el, write: false });
         }
         use SystemRegister::*;
@@ -396,13 +403,13 @@ impl Cpu {
                 self.sys.cntv_ctl_el0 | status
             }
             CntvCvalEl0 => self.sys.cntv_cval_el0,
-            CntkctlEl1 => 0,
+            CntkctlEl1 => self.sys.cntkctl_el1,
         })
     }
 
     /// MSR (register): writes a system register.
     fn write_system_register(&mut self, register: SystemRegister, value: u64) -> Result<(), Fault> {
-        if self.el < Self::minimum_el(register) {
+        if self.el < self.minimum_el(register) {
             return Err(Fault::SystemRegisterAccess { register, el: self.el, write: true });
         }
         use SystemRegister::*;
@@ -456,14 +463,16 @@ impl Cpu {
             // ISTATUS only reads, so a write keeps only ENABLE and IMASK.
             CntvCtlEl0 => self.sys.cntv_ctl_el0 = value & (CNTV_CTL_ENABLE | CNTV_CTL_IMASK),
             CntvCvalEl0 => self.sys.cntv_cval_el0 = value,
-            // EL0 is kept away from the counter and the timers, and no events are
-            // raised from the counter: the only value NeOS writes (ADR 0016).
+            // EL0 is kept away from the timers, and no events are raised from the
+            // counter (ADR 0016). It may read the virtual counter and its frequency
+            // (ADR 0019).
             CntkctlEl1 => {
-                if value != 0 {
+                if value & !CNTKCTL_EL0VCTEN != 0 {
                     return Err(Fault::Unsupported(
-                        "CNTKCTL_EL1 values that give EL0 the counter or the timers",
+                        "CNTKCTL_EL1 values that give EL0 more than the virtual counter",
                     ));
                 }
+                self.sys.cntkctl_el1 = value;
             }
         }
         Ok(())
@@ -748,6 +757,11 @@ impl Cpu {
                 // The shift amount is taken modulo the register width.
                 let amount = (self.read(rm, width) % u64::from(width.bits())) as u8;
                 self.write(rd, width, shift_register(self.read(rn, width), shift, amount, width));
+            }
+            Udiv { width, rd, rn, rm } => {
+                // Division by zero gives zero, and raises nothing.
+                let quotient = self.read(rn, width).checked_div(self.read(rm, width));
+                self.write(rd, width, quotient.unwrap_or(0));
             }
             Csel { width, rd, rn, rm, condition } => {
                 let source = if self.condition_holds(condition) { rn } else { rm };
@@ -1455,6 +1469,28 @@ mod tests {
         cpu.step(&mut bus, false).unwrap();
         assert_eq!(cpu.read(9, Width::W64), 0x1234);
         assert_eq!(cpu.el, 0);
+    }
+
+    #[test]
+    fn el0_reads_the_counter_only_when_cntkctl_allows() {
+        let mut bus = Bus::new(uart());
+        bus.load(0x80000, &0xd518e101u32.to_le_bytes()).unwrap(); // msr cntkctl_el1, x1
+        bus.load(0x80004, &0xd53be042u32.to_le_bytes()).unwrap(); // mrs x2, cntvct_el0
+        let mut cpu = Cpu::new(0x80004, false);
+        cpu.el = 0;
+        cpu.spsel = false;
+        let register = SystemRegister::CntvctEl0;
+        assert_eq!(
+            cpu.step(&mut bus, false),
+            Err(Fault::SystemRegisterAccess { register, el: 0, write: false })
+        );
+        cpu.pc = 0x80000;
+        cpu.el = 1;
+        cpu.write(1, Width::W64, CNTKCTL_EL0VCTEN);
+        cpu.step(&mut bus, false).unwrap();
+        cpu.el = 0;
+        cpu.step(&mut bus, false).unwrap();
+        assert!(cpu.read(2, Width::W64) > 0);
     }
 
     #[test]

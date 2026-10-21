@@ -29,6 +29,7 @@ works live here.
 | 0013 | [SBC](0013-sbc.md) | Accepted |
 | 0014 | [Threads and address spaces](0014-threads-and-address-spaces.md) | Accepted |
 | 0015 | [LDRSW (register)](0015-ldrsw.md) | Accepted |
-| 0016 | [The timer and interrupts](0016-the-timer-and-interrupts.md) | Accepted; amended by 0017 |
+| 0016 | [The timer and interrupts](0016-the-timer-and-interrupts.md) | Accepted; amended by 0017 and 0019 |
 | 0017 | [Device interrupts and the system timer](0017-device-interrupts-and-the-system-timer.md) | Accepted; amended by 0018 |
-| 0018 | [The UART's interrupts](0018-the-uarts-interrupts.md) | Accepted |
+| 0018 | [The UART's interrupts](0018-the-uarts-interrupts.md) | Accepted; amended by 0019 |
+| 0019 | [The SD card](0019-the-sd-card.md) | Proposed |

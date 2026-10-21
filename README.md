@@ -20,15 +20,15 @@ it. QEMU's `raspi3b` machine is the reference that both projects are checked aga
 
 ## Status
 
-Nebu runs NeOS up to stage 6b of its microkernel. It boots the kernel directly or
+Nebu runs NeOS up to its user-space SD card driver. It boots the kernel directly or
 through the NeOS chainloader, drops to EL1 with it, translates every access through
 the kernel's page tables, answers the kernel's question about memory through the
 firmware mailbox, runs the kernel's threads at EL0 with their system calls,
 preempts them with the virtual timer's interrupt, wakes its drivers with the
-system timer's, and takes the exceptions and
-aborts the kernel's tests raise. Its output matches QEMU's byte for byte, including
-the panic path and the kernel's fault reports. It currently implements 90 A64
-instructions, 27 system registers, six kinds of exception and six devices; see
+system timer's, the UART's and the SD card controller's, reads blocks from an SD
+card image, and takes the exceptions and aborts the kernel's tests raise. Its output matches QEMU's byte for byte, including
+the panic path and the kernel's fault reports. It currently implements 93 A64
+instructions, 27 system registers, six kinds of exception and seven devices; see
 [`docs/implemented.md`](docs/implemented.md).
 
 ## Building and running
@@ -45,6 +45,7 @@ cargo build --release
 |------------------|--------|
 | `--semihosting`  | Lets `hlt #0xf000` make semihosting calls, as QEMU's `-semihosting` does. NeOS test builds use this to exit. |
 | `--trace`        | Prints every instruction to standard error before running it. |
+| `--sd <file>`    | Puts an SD card holding `<file>`, which must be larger than 2 GiB, in the slot. It is only ever read ([ADR 0019](docs/decisions/0019-the-sd-card.md)). |
 
 The emulated serial port is Nebu's standard output and standard input, like QEMU's
 `-serial stdio`.
