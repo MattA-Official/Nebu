@@ -997,6 +997,14 @@ impl Cpu {
                 }
                 self.write(rt, Width::W32, value);
             }
+            LdrsbImmediate { width, rt, rn, index, offset } => {
+                let (address, writeback) = self.address(rn, index, offset)?;
+                let value = self.load(bus, address, 1)?;
+                if let Some(base) = writeback {
+                    self.write_sp(rn, Width::W64, base);
+                }
+                self.write(rt, width, value as u8 as i8 as i64 as u64);
+            }
             LdrbRegister { rt, rn, rm, extend } => {
                 let address = self.base(rn)?.wrapping_add(self.extend_register(rm, extend));
                 let value = self.load(bus, address, 1)?;

@@ -33,3 +33,4 @@ works live here.
 | 0017 | [Device interrupts and the system timer](0017-device-interrupts-and-the-system-timer.md) | Accepted; amended by 0018 |
 | 0018 | [The UART's interrupts](0018-the-uarts-interrupts.md) | Accepted; amended by 0019 |
 | 0019 | [The SD card](0019-the-sd-card.md) | Accepted |
+| 0020 | [LDRSB (immediate)](0020-ldrsb-immediate.md) | Accepted |
