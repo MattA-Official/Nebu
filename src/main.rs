@@ -9,6 +9,7 @@ mod bus;
 mod cpu;
 mod decode;
 mod gpio;
+mod local;
 mod mailbox;
 mod mmu;
 mod pl011;

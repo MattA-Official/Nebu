@@ -16,6 +16,16 @@ use crate::mmu::{self, Access, SCTLR_M};
 /// in the low byte.
 const MPIDR_CORE_0: u64 = 0x8000_0000;
 
+/// The rate the generic timer's counter counts at: 62.5 MHz, as QEMU's `raspi3b`
+/// reports in CNTFRQ_EL0 (ADR 0016).
+const COUNTER_FREQUENCY: u64 = 62_500_000;
+/// CNTV_CTL_EL0's bits: ENABLE, IMASK, and ISTATUS, which only reads.
+const CNTV_CTL_ENABLE: u64 = 1 << 0;
+const CNTV_CTL_IMASK: u64 = 1 << 1;
+const CNTV_CTL_ISTATUS: u64 = 1 << 2;
+/// PSTATE.I, in Nebu's four DAIF bits: IRQs are masked.
+const DAIF_I: u8 = 0b0010;
+
 /// The semihosting trap: `hlt #0xf000` (ADR 0006).
 const SEMIHOSTING_HLT: u16 = 0xF000;
 /// Semihosting operation: end the run.
@@ -123,6 +133,8 @@ struct SystemRegisters {
     elr_el2: u64,
     cpacr_el1: u64,
     tpidr_el0: u64,
+    cntv_ctl_el0: u64,
+    cntv_cval_el0: u64,
 }
 
 /// HCR_EL2.RW: EL1 runs AArch64.
@@ -178,9 +190,12 @@ pub struct Cpu {
     pub flags: Flags,
     /// The current exception level.
     pub el: u8,
-    /// PSTATE.DAIF: which exceptions are masked. Nothing raises interrupts yet, so
-    /// this is only stored and restored.
+    /// PSTATE.DAIF: which exceptions are masked. Only I, for the virtual timer's
+    /// IRQ, has any effect (ADR 0016).
     daif: u8,
+    /// How many instructions the core has run, which is also its physical counter:
+    /// one count for each (ADR 0016).
+    count: u64,
     sys: SystemRegisters,
     /// The event register, which `wfe` waits on.
     event: bool,
@@ -208,6 +223,7 @@ impl Cpu {
             flags: Flags { z: true, ..Flags::default() },
             el: 2,
             daif: 0b1111,
+            count: 0,
             sys: SystemRegisters::default(),
             event: false,
             semihosting,
@@ -263,6 +279,37 @@ impl Cpu {
         Ok(self.sys.vbar_el1.wrapping_add(offset))
     }
 
+    /// Takes an IRQ before the instruction at the program counter, which runs when the
+    /// handler returns. Returns the address of the vector to run. ESR_EL1 is left as
+    /// it is, as the architecture says for interrupts.
+    fn take_irq(&mut self) -> Result<u64, Fault> {
+        // IRQ vectors are 0x80 after the synchronous ones.
+        let offset = match (self.el, self.spsel) {
+            (0, _) => 0x480,
+            (1, false) => 0x080,
+            (1, true) => 0x280,
+            _ => return Err(Fault::Unsupported("taking an IRQ at EL2")),
+        };
+        self.sys.spsr_el1 = self.pstate();
+        self.sys.elr_el1 = self.pc;
+        self.el = 1;
+        self.spsel = true;
+        self.daif = 0b1111;
+        Ok(self.sys.vbar_el1.wrapping_add(offset))
+    }
+
+    /// The virtual counter: the physical one, less CNTVOFF_EL2.
+    fn virtual_count(&self) -> u64 {
+        self.count.wrapping_sub(self.sys.cntvoff_el2)
+    }
+
+    /// Whether the virtual timer's condition is met: it is enabled, and the virtual
+    /// counter has reached its comparator. This is CNTV_CTL_EL0.ISTATUS.
+    fn virtual_timer_met(&self) -> bool {
+        self.sys.cntv_ctl_el0 & CNTV_CTL_ENABLE != 0
+            && self.virtual_count() >= self.sys.cntv_cval_el0
+    }
+
     /// ERET: restores PSTATE from the current EL's SPSR and returns the address in its
     /// ELR.
     fn exception_return(&mut self) -> Result<u64, Fault> {
@@ -306,6 +353,9 @@ impl Cpu {
             // EL0 can read it only when SCTLR_EL1.UCT is set, which Nebu does not allow.
             CtrEl0 => 1,
             TpidrEl0 => 0,
+            // EL0 can reach them only as CNTKCTL_EL1 allows, and Nebu allows only 0.
+            CntfrqEl0 | CntvctEl0 | CntvCtlEl0 | CntvCvalEl0 => 1,
+            CntkctlEl1 => 1,
             HcrEl2 | CnthctlEl2 | CntvoffEl2 | SpsrEl2 | ElrEl2 | SpEl1 => 2,
         }
     }
@@ -339,6 +389,14 @@ impl Cpu {
             CpacrEl1 => self.sys.cpacr_el1,
             CtrEl0 => CTR_EL0,
             TpidrEl0 => self.sys.tpidr_el0,
+            CntfrqEl0 => COUNTER_FREQUENCY,
+            CntvctEl0 => self.virtual_count(),
+            CntvCtlEl0 => {
+                let status = if self.virtual_timer_met() { CNTV_CTL_ISTATUS } else { 0 };
+                self.sys.cntv_ctl_el0 | status
+            }
+            CntvCvalEl0 => self.sys.cntv_cval_el0,
+            CntkctlEl1 => 0,
         })
     }
 
@@ -349,7 +407,7 @@ impl Cpu {
         }
         use SystemRegister::*;
         match register {
-            MpidrEl1 | CurrentEl | EsrEl1 | FarEl1 | CtrEl0 => {
+            MpidrEl1 | CurrentEl | EsrEl1 | FarEl1 | CtrEl0 | CntvctEl0 => {
                 // Writable on hardware in the case of ESR and FAR, but nothing should.
                 return Err(Fault::SystemRegisterAccess { register, el: self.el, write: true });
             }
@@ -378,7 +436,7 @@ impl Cpu {
                 }
                 self.sys.hcr_el2 = value;
             }
-            // Nebu has no timers yet, so these are only stored.
+            // Nebu lets EL1 use the counter and timers whatever this says.
             CnthctlEl2 => self.sys.cnthctl_el2 = value,
             CntvoffEl2 => self.sys.cntvoff_el2 = value,
             SpsrEl2 => self.sys.spsr_el2 = value,
@@ -392,6 +450,20 @@ impl Cpu {
                     return Err(Fault::Unsupported("CPACR_EL1 values that allow FP or SIMD"));
                 }
                 self.sys.cpacr_el1 = value;
+            }
+            // Only the firmware sets the rate, before the kernel starts.
+            CntfrqEl0 => return Err(Fault::Unsupported("writing CNTFRQ_EL0")),
+            // ISTATUS only reads, so a write keeps only ENABLE and IMASK.
+            CntvCtlEl0 => self.sys.cntv_ctl_el0 = value & (CNTV_CTL_ENABLE | CNTV_CTL_IMASK),
+            CntvCvalEl0 => self.sys.cntv_cval_el0 = value,
+            // EL0 is kept away from the counter and the timers, and no events are
+            // raised from the counter: the only value NeOS writes (ADR 0016).
+            CntkctlEl1 => {
+                if value != 0 {
+                    return Err(Fault::Unsupported(
+                        "CNTKCTL_EL1 values that give EL0 the counter or the timers",
+                    ));
+                }
             }
         }
         Ok(())
@@ -516,6 +588,19 @@ impl Cpu {
     /// If the instruction's fetch or one of its data accesses fails translation, the
     /// CPU takes an abort instead, and the next instruction is the abort handler's.
     pub fn step(&mut self, bus: &mut Bus, trace: bool) -> Result<Step, Fault> {
+        self.count = self.count.wrapping_add(1);
+        // The virtual timer's interrupt reaches the core through the local
+        // interrupt controller, and is taken between instructions when PSTATE.I is
+        // clear (ADR 0016).
+        let firing = self.virtual_timer_met() && self.sys.cntv_ctl_el0 & CNTV_CTL_IMASK == 0;
+        bus.set_virtual_timer(firing);
+        if bus.irq_pending() && self.daif & DAIF_I == 0 {
+            if trace {
+                eprintln!("irq at {:#010x}", self.pc);
+            }
+            self.pc = self.take_irq()?;
+            return Ok(Step::Continue);
+        }
         match self.execute(bus, trace) {
             Ok(step) => Ok(step),
             Err(Stop::Fault(fault)) => Err(fault),
