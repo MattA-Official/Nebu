@@ -32,4 +32,4 @@ works live here.
 | 0016 | [The timer and interrupts](0016-the-timer-and-interrupts.md) | Accepted; amended by 0017 and 0019 |
 | 0017 | [Device interrupts and the system timer](0017-device-interrupts-and-the-system-timer.md) | Accepted; amended by 0018 |
 | 0018 | [The UART's interrupts](0018-the-uarts-interrupts.md) | Accepted; amended by 0019 |
-| 0019 | [The SD card](0019-the-sd-card.md) | Proposed |
+| 0019 | [The SD card](0019-the-sd-card.md) | Accepted |

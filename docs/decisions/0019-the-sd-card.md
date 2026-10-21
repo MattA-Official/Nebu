@@ -1,6 +1,6 @@
 # 0019. The SD card
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-21
 - **Amends:** [0016](0016-the-timer-and-interrupts.md) (CNTKCTL_EL1 only 0) and
   [0018](0018-the-uarts-interrupts.md) (decision 3, which interrupts the controller
