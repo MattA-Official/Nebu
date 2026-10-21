@@ -1,6 +1,6 @@
 # 0016. The timer and interrupts
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-21
 - **Amends:** [0006](0006-machine-model.md) (its list of devices) and
   [0008](0008-exception-levels-and-exceptions.md) (decision 5's rule that every
