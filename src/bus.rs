@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::gpio::Gpio;
-use crate::local::{Controller, Local};
+use crate::local::{self, Controller, Local};
 use crate::mailbox::{self, Mailbox, Request};
 use crate::pl011::Pl011;
 use crate::system_timer::SystemTimer;
@@ -96,7 +96,13 @@ pub struct Bus {
     local: Local,
     controller: Controller,
     system_timer: SystemTimer,
+    /// The core's counter at which to next look for input to the UART.
+    next_input_poll: u64,
 }
+
+/// How often, in the core's counts, the bus takes input that has arrived for the
+/// UART: about every 65 µs. Taking it more often would slow every instruction down.
+const INPUT_INTERVAL: u64 = 4096;
 
 impl Bus {
     /// Creates a bus with empty RAM, GPIO in its reset state and the given UART.
@@ -109,6 +115,7 @@ impl Bus {
             local: Local::default(),
             controller: Controller::default(),
             system_timer: SystemTimer::default(),
+            next_input_poll: 0,
         }
     }
 
@@ -148,11 +155,14 @@ impl Bus {
                 .read(offset)
                 .map(u64::from)
                 .ok_or(BusError::DeviceRegister { device, offset }),
-            Some((device @ "PL011 UART", offset)) if size == 4 => self
-                .uart
-                .read(offset)
-                .map(u64::from)
-                .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "PL011 UART", offset)) if size == 4 => {
+                // Reading can take input, or the last byte of it, which raises or
+                // lowers the UART's interrupt.
+                let value =
+                    self.uart.read(offset).ok_or(BusError::DeviceRegister { device, offset });
+                self.update_gpu_line();
+                value.map(u64::from)
+            }
             Some((device @ "local peripherals", offset)) if size == 4 => self
                 .local
                 .read(offset)
@@ -195,10 +205,13 @@ impl Bus {
                 .gpio
                 .write(offset, value as u32)
                 .ok_or(BusError::DeviceRegister { device, offset }),
-            Some((device @ "PL011 UART", offset)) if size == 4 => self
-                .uart
-                .write(offset, value as u32)
-                .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "PL011 UART", offset)) if size == 4 => {
+                self.uart
+                    .write(offset, value as u32)
+                    .ok_or(BusError::DeviceRegister { device, offset })?;
+                self.update_gpu_line();
+                Ok(())
+            }
             Some((device @ "local peripherals", offset)) if size == 4 => self
                 .local
                 .write(offset, value as u32)
@@ -234,23 +247,45 @@ impl Bus {
     }
 
     /// Moves the devices on to the time when the core's counter reads `ticks`, and
-    /// raises or lowers the BCM2835 line to match (ADR 0017).
+    /// raises or lowers the BCM2835 line to match (ADR 0017). Every
+    /// [`INPUT_INTERVAL`] ticks it also takes any input that has arrived for the
+    /// UART (ADR 0018).
     pub fn advance(&mut self, ticks: u64) {
-        if self.system_timer.advance(ticks) {
+        let mut changed = self.system_timer.advance(ticks);
+        if ticks >= self.next_input_poll {
+            self.next_input_poll = ticks.saturating_add(INPUT_INTERVAL);
+            changed |= self.uart.poll();
+        }
+        if changed {
             self.update_gpu_line();
         }
     }
 
     /// Raises the BCM2835 line while an enabled interrupt is raised. The levels and
-    /// the enables change only when the system timer counts or either device is
-    /// written.
+    /// the enables change only when the system timer counts, input arrives or a
+    /// device is read or written.
     fn update_gpu_line(&mut self) {
         self.local.set_gpu(self.device_levels() & self.controller.enabled() != 0);
     }
 
-    /// The device interrupts raised: only the system timer's.
+    /// The device interrupts raised: the system timer's and the UART's.
     fn device_levels(&self) -> u64 {
-        u64::from(self.system_timer.levels())
+        let uart = if self.uart.interrupt() { local::UART } else { 0 };
+        u64::from(self.system_timer.levels()) | uart
+    }
+
+    /// Waits for input to the UART, if it would raise an enabled interrupt, for a
+    /// core with nothing else to wait for (ADR 0018). Returns false if it would not,
+    /// or if the input has ended, so that nothing can come.
+    pub fn wait_for_input(&mut self) -> bool {
+        if self.controller.enabled() & local::UART == 0 || !self.uart.receive_enabled() {
+            return false;
+        }
+        if !self.uart.wait_for_input() {
+            return false;
+        }
+        self.update_gpu_line();
+        true
     }
 
     /// Whether core 0 has an IRQ pending.

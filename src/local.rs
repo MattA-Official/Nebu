@@ -3,9 +3,10 @@
 //! (ADRs 0016 and 0017).
 //!
 //! Nebu models core 0's virtual timer interrupt, the BCM2835 line routed to core 0
-//! as an IRQ, and on that line the system timer's comparators 1 and 3. Every other
-//! source must stay off: the local timer, core 0's mailbox interrupts, the FIQ, and
-//! every other device interrupt, which Nebu never raises.
+//! as an IRQ, and on that line the system timer's comparators 1 and 3 and the PL011
+//! UART's interrupt, 57 (ADR 0018). Every other source must stay off: the local
+//! timer, core 0's mailbox interrupts, the FIQ, and every other device interrupt,
+//! which Nebu never raises.
 
 /// The local block's registers that NeOS uses: the local timer's control, then core
 /// 0's timer interrupt control, mailbox interrupt control and pending IRQ sources.
@@ -94,9 +95,13 @@ impl Local {
     }
 }
 
-/// The device interrupts Nebu can raise: the system timer's comparators 1 and 3.
-/// Comparators 0 and 2 are the GPU's on the Pi, and NeOS never enables them.
-const MODELLED: u64 = 0b1010;
+/// The device interrupts Nebu can raise: the system timer's comparators 1 and 3, and
+/// the PL011 UART's. Comparators 0 and 2 are the GPU's on the Pi, and NeOS never
+/// enables them.
+const MODELLED: u64 = 0b1010 | UART;
+
+/// The PL011 UART's interrupt (ADR 0018).
+pub const UART: u64 = 1 << 57;
 
 /// The BCM2835 controller's state.
 #[derive(Default)]
@@ -125,7 +130,7 @@ impl Controller {
             ENABLE_IRQS_1 if u64::from(value) & !MODELLED == 0 => {
                 self.enabled |= u64::from(value);
             }
-            ENABLE_IRQS_2 if value == 0 => {}
+            ENABLE_IRQS_2 if high & !MODELLED == 0 => self.enabled |= high,
             DISABLE_IRQS_1 => self.enabled &= !u64::from(value),
             DISABLE_IRQS_2 => self.enabled &= !high,
             DISABLE_BASIC_IRQS => {}
@@ -183,5 +188,16 @@ mod tests {
         local.set_gpu(true);
         assert_eq!(local.read(CORE0_IRQ_SOURCE), Some(GPU));
         assert!(local.irq_pending());
+    }
+
+    #[test]
+    fn enables_and_disables_the_uart() {
+        let mut controller = Controller::default();
+        controller.write(ENABLE_IRQS_2, 1 << 25).unwrap();
+        assert_eq!(controller.enabled(), UART);
+        assert_eq!(controller.read(PENDING_2, UART), Some(1 << 25));
+        assert_eq!(controller.write(ENABLE_IRQS_2, 1 << 24), None);
+        controller.write(DISABLE_IRQS_2, 1 << 25).unwrap();
+        assert_eq!(controller.enabled(), 0);
     }
 }
