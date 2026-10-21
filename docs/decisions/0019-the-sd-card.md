@@ -13,8 +13,9 @@ NeOS reads the Pi's SD card from a user-space driver
 What it asks of the machine:
 
 - **The GPIO.** The driver sets pins 34 to 39 to inputs and pins 48 to 53 to
-  alternate function 3, through GPFSEL3, GPFSEL4 and GPFSEL5, reading each first.
-  On the Pi this connects the card's slot to the Arasan EMMC controller.
+  alternate function 3, through GPFSEL3, GPFSEL4 and GPFSEL5, reading each first,
+  and gives pins 49 to 53 pull-ups through GPPUD and GPPUDCLK1. On the Pi this
+  connects the card's slot to the Arasan EMMC controller.
 - **The Arasan EMMC controller** at 0x3F30_0000. The driver resets it through
   CONTROL1, sets its clock there, chooses which interrupts it records (IRPT_MASK)
   and raises (IRPT_EN), and sends commands by writing ARG1 and then CMDTM. It reads
@@ -100,7 +101,8 @@ function 3.
 3. **The card** answers CMD0, CMD8, CMD55, ACMD41, CMD2, CMD3, CMD9, CMD7 and CMD17
    in the states the SD specification allows, as QEMU's card does, and only while
    pins 48 to 53 are all alternate function 3. Anything else halts Nebu.
-4. **The GPIO** implements GPFSEL3, GPFSEL4 and GPFSEL5 (read and write).
+4. **The GPIO** implements GPFSEL3, GPFSEL4, GPFSEL5 and GPPUDCLK1 (read and
+   write). Pulls have no effect, since Nebu has no pins.
 5. **The BCM2835 controller** also enables interrupt 62, the EMMC controller's.
 6. **CNTKCTL_EL1** accepts EL0VCTEN (bit 1) as well as 0. While it is set, EL0 may
    read CNTVCT_EL0 and CNTFRQ_EL0. Any other bit still halts Nebu. This amends ADR

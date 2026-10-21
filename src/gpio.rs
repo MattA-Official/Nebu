@@ -13,8 +13,9 @@ const GPFSEL5: u64 = 0x14;
 const ALT3: u32 = 0b111;
 /// Pull-up/down control.
 const GPPUD: u64 = 0x94;
-/// Pull-up/down clock for pins 0 to 31.
+/// Pull-up/down clock for pins 0 to 31, and for pins 32 to 53.
 const GPPUDCLK0: u64 = 0x98;
+const GPPUDCLK1: u64 = 0x9C;
 
 /// The GPIO registers NeOS uses.
 #[derive(Default)]
@@ -25,6 +26,7 @@ pub struct Gpio {
     gpfsel5: u32,
     gppud: u32,
     gppudclk0: u32,
+    gppudclk1: u32,
 }
 
 impl Gpio {
@@ -37,6 +39,7 @@ impl Gpio {
             GPFSEL5 => Some(self.gpfsel5),
             GPPUD => Some(self.gppud),
             GPPUDCLK0 => Some(self.gppudclk0),
+            GPPUDCLK1 => Some(self.gppudclk1),
             _ => None,
         }
     }
@@ -53,6 +56,8 @@ impl Gpio {
             GPFSEL5 => self.gpfsel5 = value & 0xFFF,
             GPPUD => self.gppud = value & 0b11,
             GPPUDCLK0 => self.gppudclk0 = value,
+            // Only pins 32 to 53 exist.
+            GPPUDCLK1 => self.gppudclk1 = value & 0x3F_FFFF,
             _ => return None,
         }
         Some(())
