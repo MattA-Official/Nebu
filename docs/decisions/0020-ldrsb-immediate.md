@@ -1,6 +1,6 @@
 # 0020. LDRSB (immediate)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-21
 
 ## Context
@@ -35,4 +35,4 @@ LDRSB only with a register offset.
 
 - Nebu runs all fifteen of NeOS's test scenarios, including the new `shell`
   scenario, with the same output as QEMU.
-- Nebu implements 93 instructions.
+- Nebu implements 94 instructions, with the SD card stage's.

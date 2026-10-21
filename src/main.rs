@@ -8,6 +8,7 @@
 mod bus;
 mod cpu;
 mod decode;
+mod emmc;
 mod gpio;
 mod local;
 mod mailbox;
@@ -22,6 +23,7 @@ use std::{env, fs, thread};
 
 use bus::Bus;
 use cpu::{Cpu, Step};
+use emmc::{Card, Emmc};
 use pl011::Pl011;
 
 /// Where the firmware loads `kernel8.img` and starts running it.
@@ -31,19 +33,30 @@ const LOAD_ADDRESS: u64 = 0x80000;
 const FAULT_EXIT_CODE: u8 = 70;
 
 const USAGE: &str = "\
-usage: nebu [--semihosting] [--trace] <kernel8.img>
+usage: nebu [--semihosting] [--trace] [--sd <card.img>] <kernel8.img>
 
   --semihosting  let `hlt #0xf000` make semihosting calls, as QEMU's -semihosting does
-  --trace        print every instruction to standard error before running it";
+  --trace        print every instruction to standard error before running it
+  --sd <file>    put an SD card holding <file> in the slot; it must be a whole
+                 number of 512 KiB, from 2 GiB to 32 GiB, and is only ever read";
 
 fn main() -> ExitCode {
     let mut semihosting = false;
     let mut trace = false;
+    let mut card = None;
     let mut image = None;
-    for argument in env::args().skip(1) {
+    let mut arguments = env::args().skip(1);
+    while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--semihosting" => semihosting = true,
             "--trace" => trace = true,
+            "--sd" if card.is_none() => match arguments.next() {
+                Some(path) => card = Some(path),
+                None => {
+                    eprintln!("{USAGE}");
+                    return ExitCode::from(2);
+                }
+            },
             _ if argument.starts_with('-') || image.is_some() => {
                 eprintln!("{USAGE}");
                 return ExitCode::from(2);
@@ -64,7 +77,15 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut bus = Bus::new(Pl011::new(Box::new(std::io::stdout()), read_stdin()));
+    let card = match card.map(|path| open_card(&path)).transpose() {
+        Ok(card) => card,
+        Err(error) => {
+            eprintln!("nebu: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let uart = Pl011::new(Box::new(std::io::stdout()), read_stdin());
+    let mut bus = Bus::with_emmc(uart, Emmc::new(card));
     if let Err(error) = bus.load(LOAD_ADDRESS, &bytes) {
         eprintln!("nebu: cannot load {image}: {error}");
         return ExitCode::from(2);
@@ -91,6 +112,12 @@ fn main() -> ExitCode {
             }
         }
     }
+}
+
+/// Opens the SD card image at `path`, for reading only.
+fn open_card(path: &str) -> Result<Card, String> {
+    let file = fs::File::open(path).map_err(|error| format!("cannot read {path}: {error}"))?;
+    Card::new(file).map_err(|error| format!("{path}: {error}"))
 }
 
 /// Starts passing standard input to the UART, as QEMU's `-serial stdio` does.
