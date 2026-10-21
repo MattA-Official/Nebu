@@ -113,8 +113,9 @@ With the driver waiting, the kernel now runs `wfi` with nothing due but input.
    second enable register, and its second pending register shows it while the UART's
    line is high: while RIS and IMSC share a bit. Enabling any other interrupt there still halts Nebu.
 4. **`wfi`** with no timer or comparator due waits for standard input if the UART's
-   receive interrupt and interrupt 57 are enabled, and then finds the interrupt
-   pending. Otherwise, or once standard input has ended, the core sleeps for ever.
+   receive interrupt and interrupt 57 are enabled and no received byte is waiting,
+   and then finds the interrupt pending. Otherwise, or once standard input has
+   ended, the core sleeps for ever.
 5. **STRB (register) and LDRSB (register)** are implemented, with every extension of
    the offset register, and LDRSB with 32-bit and 64-bit destinations.
 

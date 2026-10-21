@@ -275,8 +275,8 @@ impl Bus {
     }
 
     /// Waits for input to the UART, if it would raise an enabled interrupt, for a
-    /// core with nothing else to wait for (ADR 0018). Returns false if it would not,
-    /// or if the input has ended, so that nothing can come.
+    /// core with nothing else to wait for (ADR 0018). Returns whether it raised one:
+    /// false if input could not, or once the input has ended.
     pub fn wait_for_input(&mut self) -> bool {
         if self.controller.enabled() & local::UART == 0 || !self.uart.receive_enabled() {
             return false;

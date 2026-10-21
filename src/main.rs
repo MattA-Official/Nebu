@@ -76,8 +76,8 @@ fn main() -> ExitCode {
             Ok(Step::Continue) => {}
             Ok(Step::Exit(code)) => return ExitCode::from(code as u8),
             Ok(Step::Asleep) => {
-                // Nothing in Nebu can send an event, or raise an interrupt that is not
-                // already due, so the core sleeps forever, as it would in QEMU.
+                // Nothing in Nebu can send an event, and no interrupt is due or can be
+                // raised by input, so the core sleeps forever, as it would in QEMU.
                 eprintln!("nebu: core 0 is waiting for something that nothing can send");
                 eprintln!("nebu: press Ctrl-C to quit");
                 loop {
@@ -95,7 +95,8 @@ fn main() -> ExitCode {
 
 /// Starts passing standard input to the UART, as QEMU's `-serial stdio` does.
 ///
-/// A separate thread does the reading, so the emulated CPU never waits for input.
+/// A separate thread does the reading, so the emulated CPU waits for input only
+/// when it has nothing else to wait for (ADR 0018).
 fn read_stdin() -> Receiver<Vec<u8>> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {

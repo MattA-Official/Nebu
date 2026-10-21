@@ -94,14 +94,15 @@ impl Pl011 {
         raised
     }
 
-    /// Waits for bytes to arrive from `input`. Returns false if none ever will,
-    /// because the input has ended.
+    /// Waits for bytes to arrive from `input`. Returns whether they raised the
+    /// receive interrupt: false if bytes were already waiting, so that no more can
+    /// raise it, or if the input has ended, so that none ever will.
     pub fn wait_for_input(&mut self) -> bool {
+        if !self.received.is_empty() {
+            return false;
+        }
         match self.input.recv() {
-            Ok(bytes) => {
-                self.arrive(bytes);
-                true
-            }
+            Ok(bytes) => self.arrive(bytes),
             Err(_) => false,
         }
     }
@@ -258,6 +259,9 @@ mod tests {
         sender.send(vec![b'z']).unwrap();
         assert!(uart.wait_for_input());
         assert_eq!(uart.read(RIS), Some(INT_RX));
+        // A byte is waiting, so more input could raise nothing.
+        assert!(!uart.wait_for_input());
+        uart.read(DR).unwrap();
         drop(sender);
         assert!(!uart.wait_for_input());
     }
