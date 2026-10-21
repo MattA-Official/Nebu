@@ -45,7 +45,7 @@ cargo build --release
 |------------------|--------|
 | `--semihosting`  | Lets `hlt #0xf000` make semihosting calls, as QEMU's `-semihosting` does. NeOS test builds use this to exit. |
 | `--trace`        | Prints every instruction to standard error before running it. |
-| `--sd <file>`    | Puts an SD card holding `<file>`, which must be larger than 2 GiB, in the slot. It is only ever read ([ADR 0019](docs/decisions/0019-the-sd-card.md)). |
+| `--sd <file>`    | Puts an SD card holding `<file>`, which must be a whole number of 512 KiB, larger than 2 GiB and at most 32 GiB, in the slot. It is only ever read ([ADR 0019](docs/decisions/0019-the-sd-card.md)). |
 
 The emulated serial port is Nebu's standard output and standard input, like QEMU's
 `-serial stdio`.

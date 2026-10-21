@@ -121,8 +121,8 @@ impl Bus {
         Bus::with_emmc(uart, Emmc::new(None))
     }
 
-    /// Creates a bus as [`Bus::new`] does, but with the given EMMC controller and
-    /// whatever card is in it.
+    /// Creates a bus with the given UART and EMMC controller, with whatever card is
+    /// in the controller.
     pub fn with_emmc(uart: Pl011, emmc: Emmc) -> Self {
         Bus {
             ram: Ram::default(),

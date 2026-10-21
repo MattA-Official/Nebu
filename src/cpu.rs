@@ -352,7 +352,7 @@ impl Cpu {
         use SystemRegister::*;
         match register {
             // EL0 may read the counter and its frequency when CNTKCTL_EL1.EL0VCTEN is
-            // set (NeOS ADR 0028).
+            // set (ADR 0019).
             CntfrqEl0 | CntvctEl0 if self.sys.cntkctl_el1 & CNTKCTL_EL0VCTEN != 0 => 0,
             MpidrEl1 | CurrentEl | SctlrEl1 | SpsrEl1 | ElrEl1 | SpEl0 | EsrEl1 | FarEl1
             | VbarEl1 | TcrEl1 | MairEl1 | Ttbr0El1 | Ttbr1El1 | CpacrEl1 => 1,

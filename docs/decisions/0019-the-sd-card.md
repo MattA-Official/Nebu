@@ -78,21 +78,24 @@ function 3.
 - **Only the commands above, in the states NeOS sends them in** _(chosen)_. Any
   other command, or one in another state, halts Nebu. A write command, or a
   transfer of anything but one 512-byte block, halts it too. Only images larger
-  than 2 GiB are accepted, since NeOS refuses smaller cards, and the card-specific
-  data is the version 2.0 layout high-capacity cards use, with the size QEMU would
-  give the same image.
+  than 2 GiB are accepted, since NeOS refuses smaller cards, and at most 32 GiB,
+  the most an SDHC card holds. The card-specific data is the version 2.0 layout
+  high-capacity cards use, with the size QEMU would give the same image, so the
+  image must be a whole number of its unit, 512 KiB.
 
 ## Decision
 
 1. **`--sd <file>`** puts a high-capacity card holding `<file>` in the slot. The
-   file must be a whole number of 512-byte blocks and larger than 2 GiB, and is
-   opened read-only. Without it the slot is empty, and every command with a
+   file must be a whole number of 512 KiB, larger than 2 GiB and at most 32 GiB,
+   and is opened read-only. Without it the slot is empty, and every command with a
    response times out.
 2. **The EMMC controller** at 0x3F30_0000 implements BLKSIZECNT, ARG1, CONTROL1,
    INTERRUPT, IRPT_MASK and IRPT_EN (read and write), CMDTM (write), and RESP0 to
    RESP3, DATA and STATUS (read), as QEMU 8.2 behaves, with commands that finish at
-   once. CONTROL1's resets finish at once, and its clock is stable as soon as it is
-   enabled. A command with the clock off, or while a block is being read, halts
+   once. CONTROL1's resets finish at once, and resetting the command or data line
+   clears its interrupts, as QEMU's does. Its clock is stable as soon as it is
+   enabled. A command with the clock off, while a block is being read, or with a
+   command type, multi-block transfer, block count or automatic command, halts
    Nebu. Any other register halts it.
 3. **The card** answers CMD0, CMD8, CMD55, ACMD41, CMD2, CMD3, CMD9, CMD7 and CMD17
    in the states the SD specification allows, as QEMU's card does, and only while

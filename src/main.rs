@@ -37,8 +37,8 @@ usage: nebu [--semihosting] [--trace] [--sd <card.img>] <kernel8.img>
 
   --semihosting  let `hlt #0xf000` make semihosting calls, as QEMU's -semihosting does
   --trace        print every instruction to standard error before running it
-  --sd <file>    put an SD card holding <file> in the slot; it must be larger than
-                 2 GiB, and is only ever read";
+  --sd <file>    put an SD card holding <file> in the slot; it must be a whole
+                 number of 512 KiB, from 2 GiB to 32 GiB, and is only ever read";
 
 fn main() -> ExitCode {
     let mut semihosting = false;

@@ -50,11 +50,19 @@ const CMD_TIMEOUT: u32 = 1 << 16;
 const RESPONSE_BUSY: u32 = 3;
 const DATA_PRESENT: u32 = 1 << 21;
 const READ_FROM_CARD: u32 = 1 << 4;
+/// CMDTM's bits Nebu does not model: the command type (suspend, resume, abort), a
+/// multi-block transfer, Auto CMD12 or CMD23, and the block count.
+const UNMODELLED_COMMAND_BITS: u32 = 0b11 << 22 | 1 << 5 | 0b11 << 2 | 1 << 1;
 
 /// The only block size NeOS uses, and that a high-capacity card has.
 pub const BLOCK: u64 = 512;
 /// The largest standard-capacity card. Larger cards are high capacity.
 pub const STANDARD_CAPACITY_LIMIT: u64 = 2 << 30;
+/// The largest image Nebu takes: 32 GiB, the most an SDHC card holds. Larger cards
+/// are SDXC, whose size the same CSD layout can hold, but NeOS's tests need none.
+pub const HIGH_CAPACITY_LIMIT: u64 = 32 << 30;
+/// The CSD gives a card's size in units of 512 KiB.
+const SIZE_UNIT: u64 = 512 << 10;
 
 /// The relative card address the card publishes, as QEMU's first card does.
 const RCA: u32 = 0x4567;
@@ -103,13 +111,17 @@ pub struct Card {
 }
 
 impl Card {
-    /// A card holding `image`, whose size must be a whole number of blocks and more
-    /// than 2 GiB.
+    /// A card holding `image`, whose size must be a whole number of 512 KiB, the
+    /// unit the card-specific data gives its size in, more than 2 GiB and at most
+    /// 32 GiB.
     pub fn new(image: File) -> Result<Card, String> {
         let size = image.metadata().map_err(|e| e.to_string())?.len();
-        if size <= STANDARD_CAPACITY_LIMIT || !size.is_multiple_of(BLOCK) {
-            return Err("the card image must be a whole number of 512-byte blocks and larger \
-                        than 2 GiB: Nebu models only high-capacity cards"
+        if size <= STANDARD_CAPACITY_LIMIT
+            || size > HIGH_CAPACITY_LIMIT
+            || !size.is_multiple_of(SIZE_UNIT)
+        {
+            return Err("the card image must be a whole number of 512 KiB, larger than 2 GiB \
+                        and at most 32 GiB: Nebu models only high-capacity cards"
                 .into());
         }
         Ok(Card { image, blocks: size / BLOCK, state: State::Idle, application: false })
@@ -162,9 +174,12 @@ impl Card {
                 // A made-up manufacturer, product name "NEBU" and serial number.
                 Response::Long(0x4E_4542_5500_0000_0001 << 32)
             }
+            // The status is the state the command found the card in, as for every
+            // response.
             (false, 3, State::Identification) => {
+                let status = self.status();
                 self.state = State::Standby;
-                Response::Short(RCA << 16 | self.status() & 0xFF00)
+                Response::Short(RCA << 16 | status & 0xFF00)
             }
             (false, 9, State::Standby) if argument >> 16 == RCA => Response::Long(self.csd()),
             (false, 7, State::Standby) if argument >> 16 == RCA => {
@@ -284,8 +299,14 @@ impl Emmc {
             CMDTM => self.command(value, connected)?,
             CONTROL1 if value & SRST_HC != 0 => self.reset(),
             CONTROL1 => {
-                if value & (SRST_CMD | SRST_DATA) != 0 {
+                // Resetting a line forgets what it was doing, and the interrupts
+                // that recorded it, as QEMU does.
+                if value & SRST_CMD != 0 {
+                    self.interrupt &= !CMD_DONE;
+                }
+                if value & SRST_DATA != 0 {
                     self.read = None;
+                    self.interrupt &= !(DATA_DONE | READ_RDY);
                 }
                 let value = value & !(SRST_CMD | SRST_DATA | CLK_STABLE);
                 let stable = if value & CLK_INTLEN != 0 { CLK_STABLE } else { 0 };
@@ -311,6 +332,9 @@ impl Emmc {
         }
         if self.read.is_some() {
             return Err("a command sent while a block is still being read");
+        }
+        if value & UNMODELLED_COMMAND_BITS != 0 {
+            return Err("a command type, multi-block transfer or automatic command");
         }
         let index = value >> 24 & 0x3F;
         let response_type = value >> 16 & 0b11;
@@ -416,7 +440,10 @@ mod tests {
         command(&mut emmc, 55 << 24 | 2 << 16, 0);
         assert_eq!(command(&mut emmc, 41 << 24 | 2 << 16, 0x4030_0000), OCR);
         command(&mut emmc, 2 << 24 | 1 << 16, 0);
-        assert_eq!(command(&mut emmc, 3 << 24 | 2 << 16, 0) >> 16, RCA);
+        let published = command(&mut emmc, 3 << 24 | 2 << 16, 0);
+        assert_eq!(published >> 16, RCA);
+        // The state CMD3 found the card in: identification.
+        assert_eq!(published >> 9 & 0xF, 2);
         command(&mut emmc, 9 << 24 | 1 << 16, RCA << 16);
         // C_SIZE, in bits 61:40 of the registers: 4 GiB is 8192 units of 512 KiB.
         assert_eq!(emmc.read(RESP0 + 4).unwrap().unwrap() >> 8 & 0x3F_FFFF, 8191);
@@ -434,6 +461,15 @@ mod tests {
         }
         assert_eq!(emmc.read(INTERRUPT).unwrap(), Some(READ_RDY | DATA_DONE));
         assert_eq!(emmc.read(DATA), Err("reading data with no block ready"));
+
+        // Resetting the data line forgets the read's interrupts.
+        emmc.write(INTERRUPT, READ_RDY | DATA_DONE, true).unwrap();
+        command(&mut emmc, 17 << 24 | 2 << 16 | DATA_PRESENT | READ_FROM_CARD, 1);
+        assert_eq!(emmc.read(INTERRUPT).unwrap(), Some(READ_RDY));
+        let control1 = emmc.read(CONTROL1).unwrap().unwrap();
+        emmc.write(CONTROL1, control1 | SRST_DATA, true).unwrap();
+        assert_eq!(emmc.read(INTERRUPT).unwrap(), Some(0));
+        assert_eq!(emmc.read(STATUS).unwrap().unwrap() & DAT_INHIBIT, 0);
     }
 
     #[test]
@@ -455,6 +491,10 @@ mod tests {
         assert_eq!(
             emmc.write(CMDTM, 17 << 24 | 2 << 16, true),
             Err("an SD command in a state Nebu does not model")
+        );
+        assert_eq!(
+            emmc.write(CMDTM, 18 << 24 | 2 << 16 | DATA_PRESENT | READ_FROM_CARD | 1 << 5, true),
+            Err("a command type, multi-block transfer or automatic command")
         );
         assert_eq!(emmc.write(0x28, 0, true), Ok(None));
         emmc.write(CONTROL1, 0, true).unwrap();
