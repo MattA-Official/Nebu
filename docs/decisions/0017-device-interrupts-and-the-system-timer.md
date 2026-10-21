@@ -1,6 +1,6 @@
 # 0017. Device interrupts and the system timer
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-21
 - **Amends:** [0006](0006-machine-model.md) (its list of devices) and
   [0016](0016-the-timer-and-interrupts.md) (decision 3, what the local block and

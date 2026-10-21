@@ -30,4 +30,4 @@ works live here.
 | 0014 | [Threads and address spaces](0014-threads-and-address-spaces.md) | Accepted |
 | 0015 | [LDRSW (register)](0015-ldrsw.md) | Accepted |
 | 0016 | [The timer and interrupts](0016-the-timer-and-interrupts.md) | Accepted; amended by 0017 |
-| 0017 | [Device interrupts and the system timer](0017-device-interrupts-and-the-system-timer.md) | Proposed |
+| 0017 | [Device interrupts and the system timer](0017-device-interrupts-and-the-system-timer.md) | Accepted |
