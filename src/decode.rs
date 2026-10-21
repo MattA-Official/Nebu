@@ -368,6 +368,8 @@ pub enum Instruction {
     Nop,
     /// WFE: wait for an event.
     Wfe,
+    /// WFI: wait for an interrupt.
+    Wfi,
     /// ISB: instruction synchronisation barrier.
     Isb,
     /// DSB: data synchronisation barrier. `option` is the CRm field, naming which
@@ -723,6 +725,7 @@ fn system(word: u32) -> Result<Instruction, DecodeError> {
         (0, 0, 0b011, 0b0010) if rt == 31 => match (crm, op2) {
             (0, 0) => Ok(Instruction::Nop),
             (0, 2) => Ok(Instruction::Wfe),
+            (0, 3) => Ok(Instruction::Wfi),
             _ => Err(DecodeError::Unimplemented),
         },
         // Barriers.
@@ -1427,6 +1430,7 @@ impl fmt::Display for Instruction {
             Eret => write!(f, "eret"),
             Nop => write!(f, "nop"),
             Wfe => write!(f, "wfe"),
+            Wfi => write!(f, "wfi"),
             Isb => write!(f, "isb"),
             Dsb { option } => match BARRIER_OPTIONS[usize::from(option)] {
                 "" => write!(f, "dsb #{option}"),
@@ -1841,6 +1845,7 @@ mod tests {
         assert_eq!(decode(0x7a572060).unwrap().to_string(), "ccmp w3, w23, #0x0, hs");
         assert_eq!(decode(0xfa4008a4).unwrap().to_string(), "ccmp x5, #0x0, #0x4, eq");
         assert_eq!(decode(0xb829690a).unwrap().to_string(), "str w10, [x8, x9, lsl #0]");
+        assert_eq!(decode(0xd503207f).unwrap().to_string(), "wfi");
     }
 
     #[test]
@@ -1849,7 +1854,7 @@ mod tests {
         assert_eq!(decode(0xd50b7520), Err(DecodeError::Unimplemented)); // ic ivau, x0
         assert_eq!(decode(0x9acb2949), Err(DecodeError::Unimplemented)); // asrv x9, x10, x11
         assert_eq!(decode(0x5a8b350a), Err(DecodeError::Unimplemented)); // csneg w10, w8, w11, lo
-        assert_eq!(decode(0xd503207f), Err(DecodeError::Unimplemented)); // wfi
+        assert_eq!(decode(0xd503209f), Err(DecodeError::Unimplemented)); // sev
         assert_eq!(decode(0x1e202008), Err(DecodeError::Unimplemented)); // fcmp s0, s0
         assert_eq!(
             decode(0xd538d080), // mrs x0, TPIDR_EL1

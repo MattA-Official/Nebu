@@ -589,6 +589,7 @@ impl Cpu {
     /// CPU takes an abort instead, and the next instruction is the abort handler's.
     pub fn step(&mut self, bus: &mut Bus, trace: bool) -> Result<Step, Fault> {
         self.count = self.count.wrapping_add(1);
+        bus.advance(self.count);
         // The virtual timer's interrupt reaches the core through the local
         // interrupt controller, and is taken between instructions when PSTATE.I is
         // clear (ADR 0016).
@@ -919,6 +920,24 @@ impl Cpu {
                     return Err(Fault::Unsupported("cache maintenance at EL0").into());
                 }
                 self.translate(bus, self.read(rt, Width::W64), Access::Read)?;
+            }
+            // WFI waits for an interrupt to be pending, even a masked one. Nebu skips
+            // straight to the next one due (ADR 0017).
+            Wfi if self.el == 0 => {
+                return Err(Fault::Unsupported("wfi at EL0").into());
+            }
+            Wfi if bus.irq_pending() => {}
+            Wfi => {
+                let timer = (self.sys.cntv_ctl_el0 & (CNTV_CTL_ENABLE | CNTV_CTL_IMASK)
+                    == CNTV_CTL_ENABLE
+                    && bus.virtual_timer_routed())
+                .then(|| self.sys.cntv_cval_el0.saturating_add(self.sys.cntvoff_el2));
+                match [timer, bus.next_device_interrupt()].into_iter().flatten().min() {
+                    // The next step counts one more, and finds the interrupt raised.
+                    // A deadline that has passed is already due.
+                    Some(due) => self.count = self.count.max(due.saturating_sub(1)),
+                    None => result = Step::Asleep,
+                }
             }
             Wfe => {
                 if self.event {
