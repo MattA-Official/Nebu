@@ -1,6 +1,6 @@
 # 0015. LDRSW (register)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-21
 
 ## Context

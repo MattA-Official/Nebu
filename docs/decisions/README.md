@@ -28,4 +28,4 @@ works live here.
 | 0012 | [Instructions for capabilities](0012-instructions-for-capabilities.md) | Accepted |
 | 0013 | [SBC](0013-sbc.md) | Accepted |
 | 0014 | [Threads and address spaces](0014-threads-and-address-spaces.md) | Accepted |
-| 0015 | [LDRSW (register)](0015-ldrsw.md) | Proposed |
+| 0015 | [LDRSW (register)](0015-ldrsw.md) | Accepted |
