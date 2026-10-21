@@ -27,4 +27,4 @@ works live here.
 | 0011 | [The firmware mailbox](0011-the-firmware-mailbox.md) | Accepted |
 | 0012 | [Instructions for capabilities](0012-instructions-for-capabilities.md) | Accepted |
 | 0013 | [SBC](0013-sbc.md) | Proposed |
-| 0014 | [Threads and address spaces](0014-threads-and-address-spaces.md) | Proposed |
+| 0014 | [Threads and address spaces](0014-threads-and-address-spaces.md) | Accepted |

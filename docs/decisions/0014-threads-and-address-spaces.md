@@ -1,6 +1,6 @@
 # 0014. Threads and address spaces
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-19
 
 ## Context
