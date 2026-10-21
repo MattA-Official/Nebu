@@ -71,6 +71,7 @@ all addressing modes.
 | ORR (shifted register)       | NeOS step 2: panic path      |
 | RBIT                         | NeOS stage 4: splitting memory into untyped blocks |
 | RET                          | NeOS step 2: panic path      |
+| SBC                          | NeOS stage 4: checking a split of untyped memory |
 | SBCS                         | NeOS stage 4: capabilities   |
 | SBFM                         | NeOS step 3: CRC-32          |
 | STP                          | NeOS step 2: test exit       |
@@ -100,7 +101,7 @@ Aliases are covered by the instruction they stand for: `mov` to or from SP is AD
 and `sxtb` are SBFM, `mov` with an immediate is MOVZ or MOVN, `tst` is ANDS, `lsl`
 and `lsr` with a register shift amount are LSLV and LSRV, `cset` and `cinc` are
 CSINC, `mvn` is ORN, `neg` is SUB (shifted register), `mul` is MADD, `cmn` with a
-register is ADDS (shifted register), `ngcs` is SBCS, `ror` with an immediate is EXTR,
+register is ADDS (shifted register), `ngc` and `ngcs` are SBC and SBCS, `ror` with an immediate is EXTR,
 `csetm` is CSINV, and `cmp` with an extended register is SUBS (extended register).
 LDURB and STURB run as LDRB and STRB with an unscaled offset
 ([ADR 0010](decisions/0010-el0-and-system-calls.md)), and LDUR as LDR
