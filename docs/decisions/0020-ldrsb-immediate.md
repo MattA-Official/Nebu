@@ -1,4 +1,4 @@
-# 0019. LDRSB (immediate)
+# 0020. LDRSB (immediate)
 
 - **Status:** Proposed
 - **Date:** 2026-10-21
