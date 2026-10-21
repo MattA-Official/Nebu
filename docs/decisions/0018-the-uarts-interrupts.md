@@ -1,6 +1,6 @@
 # 0018. The UART's interrupts
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-21
 - **Amends:** [0007](0007-serial-input-and-gpio.md) (the UART raises no interrupts)
   and [0017](0017-device-interrupts-and-the-system-timer.md) (decision 2, which
