@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::emmc::Emmc;
 use crate::gpio::Gpio;
 use crate::local::{self, Controller, Local};
 use crate::mailbox::{self, Mailbox, Request};
@@ -30,6 +31,10 @@ const MAILBOX_WINDOW: u64 = 0x40;
 const GPIO_BASE: u64 = 0x3F20_0000;
 /// The PL011 UART (UART0).
 const UART0_BASE: u64 = 0x3F20_1000;
+/// The Arasan EMMC controller, which drives the SD card (ADR 0019), and the size of
+/// its register window.
+const EMMC_BASE: u64 = 0x3F30_0000;
+const EMMC_WINDOW: u64 = 0x100;
 /// The size of the other devices' register windows.
 const DEVICE_WINDOW: u64 = 0x1000;
 
@@ -50,6 +55,8 @@ pub enum BusError {
     FetchFromDevice,
     /// A use of the firmware's mailbox that Nebu does not model.
     Mailbox(&'static str),
+    /// A use of the SD card or its controller that Nebu does not model.
+    Emmc(&'static str),
 }
 
 impl fmt::Display for BusError {
@@ -62,6 +69,7 @@ impl fmt::Display for BusError {
             }
             BusError::FetchFromDevice => write!(f, "instruction fetch from a device"),
             BusError::Mailbox(what) => write!(f, "mailbox: not implemented: {what}"),
+            BusError::Emmc(what) => write!(f, "EMMC: not implemented: {what}"),
         }
     }
 }
@@ -96,6 +104,7 @@ pub struct Bus {
     local: Local,
     controller: Controller,
     system_timer: SystemTimer,
+    emmc: Emmc,
     /// The core's counter at which to next look for input to the UART.
     next_input_poll: u64,
 }
@@ -105,8 +114,16 @@ pub struct Bus {
 const INPUT_INTERVAL: u64 = 4096;
 
 impl Bus {
-    /// Creates a bus with empty RAM, GPIO in its reset state and the given UART.
+    /// Creates a bus with empty RAM, GPIO in its reset state, the given UART, and no
+    /// SD card.
+    #[cfg(test)]
     pub fn new(uart: Pl011) -> Self {
+        Bus::with_emmc(uart, Emmc::new(None))
+    }
+
+    /// Creates a bus with the given UART and EMMC controller, with whatever card is
+    /// in the controller.
+    pub fn with_emmc(uart: Pl011, emmc: Emmc) -> Self {
         Bus {
             ram: Ram::default(),
             gpio: Gpio::default(),
@@ -115,6 +132,7 @@ impl Bus {
             local: Local::default(),
             controller: Controller::default(),
             system_timer: SystemTimer::default(),
+            emmc,
             next_input_poll: 0,
         }
     }
@@ -178,6 +196,12 @@ impl Bus {
                 .read(offset)
                 .map(u64::from)
                 .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "EMMC", offset)) if size == 4 => {
+                // Reading the last word of a block ends the transfer.
+                let value = self.emmc.read(offset).map_err(BusError::Emmc)?;
+                self.update_gpu_line();
+                value.map(u64::from).ok_or(BusError::DeviceRegister { device, offset })
+            }
             Some((device @ "mailbox", offset)) if size == 4 => self
                 .mailbox
                 .read(offset)
@@ -230,6 +254,15 @@ impl Bus {
                 self.update_gpu_line();
                 Ok(())
             }
+            Some((device @ "EMMC", offset)) if size == 4 => {
+                let connected = self.gpio.sd_card_connected();
+                self.emmc
+                    .write(offset, value as u32, connected)
+                    .map_err(BusError::Emmc)?
+                    .ok_or(BusError::DeviceRegister { device, offset })?;
+                self.update_gpu_line();
+                Ok(())
+            }
             Some((device @ "mailbox", offset)) if size == 4 => {
                 match self.mailbox.write(offset, value as u32).map_err(BusError::Mailbox)? {
                     Some(Request::Property { address }) => self.answer_property(address),
@@ -268,10 +301,12 @@ impl Bus {
         self.local.set_gpu(self.device_levels() & self.controller.enabled() != 0);
     }
 
-    /// The device interrupts raised: the system timer's and the UART's.
+    /// The device interrupts raised: the system timer's, the UART's and the EMMC
+    /// controller's.
     fn device_levels(&self) -> u64 {
         let uart = if self.uart.interrupt() { local::UART } else { 0 };
-        u64::from(self.system_timer.levels()) | uart
+        let emmc = if self.emmc.interrupt() { local::EMMC } else { 0 };
+        u64::from(self.system_timer.levels()) | uart | emmc
     }
 
     /// Waits for input to the UART, if it would raise an enabled interrupt, for a
@@ -349,6 +384,9 @@ fn device_at(address: u64) -> Option<(&'static str, u64)> {
     }
     if (GPIO_BASE..GPIO_BASE + DEVICE_WINDOW).contains(&address) {
         return Some(("GPIO", address - GPIO_BASE));
+    }
+    if (EMMC_BASE..EMMC_BASE + EMMC_WINDOW).contains(&address) {
+        return Some(("EMMC", address - EMMC_BASE));
     }
     if (UART0_BASE..UART0_BASE + DEVICE_WINDOW).contains(&address) {
         return Some(("PL011 UART", address - UART0_BASE));

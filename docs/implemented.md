@@ -100,6 +100,7 @@ all addressing modes.
 | TLBI VMALLE1                 | NeOS stage 2: switching page tables |
 | UBFM                         | NeOS step 3: CRC-32          |
 | UDF                          | NeOS stage 1: exceptions test |
+| UDIV                         | The SD card driver: clock divisors and delays ([ADR 0019](decisions/0019-the-sd-card.md)) |
 | UMULH                        | NeOS stage 4: capabilities   |
 | WFE                          | NeOS step 2: parking cores   |
 | WFI                          | NeOS stage 6b: waiting for a driver's interrupt |
@@ -144,12 +145,14 @@ as LDRH and STRH ([ADR 0014](decisions/0014-threads-and-address-spaces.md)).
 | CNTVCT_EL0  | Read       | One count for each instruction run          | NeOS stage 6a: the timer     |
 | CNTV_CTL_EL0 | Read/write | ENABLE and IMASK; ISTATUS reads            | NeOS stage 6a: the timer     |
 | CNTV_CVAL_EL0 | Read/write | The virtual timer's deadline              | NeOS stage 6a: the timer     |
-| CNTKCTL_EL1 | Read/write | Only 0: EL0 cannot reach the counter or timers | NeOS stage 6a: the timer  |
+| CNTKCTL_EL1 | Read/write | 0, or EL0VCTEN: EL0 may read CNTVCT_EL0 and CNTFRQ_EL0, never the timers ([ADR 0019](decisions/0019-the-sd-card.md)) | NeOS stage 6a: the timer; the SD card driver's delays |
 
 Accessing a register from a lower EL than the table allows halts Nebu, because
 hardware would trap. EL1 registers need EL1 or above, and EL2 registers need EL2.
-TPIDR_EL0 is the one register EL0 may use. The timer's registers need EL1, as
-CNTKCTL_EL1 = 0 makes them on hardware ([ADR 0016](decisions/0016-the-timer-and-interrupts.md)).
+TPIDR_EL0 is the one register EL0 may always use. The timer's registers need EL1,
+as CNTKCTL_EL1 = 0 makes them on hardware ([ADR 0016](decisions/0016-the-timer-and-interrupts.md)),
+except that EL0 may read CNTVCT_EL0 and CNTFRQ_EL0 while CNTKCTL_EL1.EL0VCTEN is set
+([ADR 0019](decisions/0019-the-sd-card.md)).
 
 ## Exceptions
 
@@ -186,9 +189,11 @@ the tables ([ADR 0009](decisions/0009-the-mmu.md)).
 | PL011 UART        | DR (read): received bytes, from standard input    | NeOS step 3: chainloader |
 | PL011 UART        | IFLS (read and write), RIS and MIS (read); the receive and transmit interrupts, as QEMU raises them; IMSC accepts only them and the receive timeout ([ADR 0018](decisions/0018-the-uarts-interrupts.md)) | NeOS stage 7: the serial driver |
 | GPIO              | GPFSEL1, GPPUD, GPPUDCLK0 (read and write)        | NeOS step 3: routing the UART to the pins |
+| GPIO              | GPFSEL3, GPFSEL4, GPFSEL5, GPPUDCLK1 (read and write); the card answers only while pins 48 to 53 are all alternate function 3 ([ADR 0019](decisions/0019-the-sd-card.md)) | The SD card driver: switching the card's pins and their pull-ups |
+| EMMC controller   | At 0x3F30_0000: BLKSIZECNT, ARG1, CONTROL1, INTERRUPT (write 1 to clear), IRPT_MASK, IRPT_EN (read and write); CMDTM (write: runs the command at once); RESP0 to RESP3, DATA, STATUS (read); interrupt 62. The card: CMD0, 2, 3, 7, 8, 9, 17 and 55, and ACMD41, on a high-capacity image read with `--sd` ([ADR 0019](decisions/0019-the-sd-card.md)) | The SD card driver |
 | Mailbox           | Mailbox 0's READ and STATUS, mailbox 1's WRITE; channel 8 with the GET_ARM_MEMORY tag only ([ADR 0011](decisions/0011-the-firmware-mailbox.md)) | NeOS stage 4: how much memory there is |
 | Interrupt controller | DISABLE_IRQS_1, DISABLE_IRQS_2, DISABLE_BASIC_IRQS (write) at 0x3F00_B21C to 0x3F00_B224 | NeOS stage 6a: turning off what is not used |
-| Interrupt controller | IRQ_PENDING_1 and 2 (read: raised interrupts), FIQ control (write 0 only), ENABLE_IRQS_1 (write: interrupts 1 and 3 only) and ENABLE_IRQS_2 (write: interrupt 57, the UART's, only) ([ADRs 0017](decisions/0017-device-interrupts-and-the-system-timer.md) and [0018](decisions/0018-the-uarts-interrupts.md)) | NeOS stages 6b and 7: drivers' interrupts |
+| Interrupt controller | IRQ_PENDING_1 and 2 (read: raised interrupts), FIQ control (write 0 only), ENABLE_IRQS_1 (write: interrupts 1 and 3 only) and ENABLE_IRQS_2 (write: interrupts 57, the UART's, and 62, the EMMC controller's, only) ([ADRs 0017](decisions/0017-device-interrupts-and-the-system-timer.md) and [0018](decisions/0018-the-uarts-interrupts.md)) | NeOS stages 6b and 7: drivers' interrupts |
 | Local peripherals | At 0x4000_0000: the GPU routing, the local timer's control and core 0's mailbox interrupt control (write 0 only); core 0's timer interrupt control (0 or the virtual timer); core 0's IRQ source (read: the virtual timer and the BCM2835 line) ([ADRs 0016](decisions/0016-the-timer-and-interrupts.md) and [0017](decisions/0017-device-interrupts-and-the-system-timer.md)) | NeOS stages 6a and 6b: interrupts |
 | System timer      | At 0x3F00_3000: CS (read; write 1 to clear), CLO and CHI (read), C0 to C3 (read and write); 1 MHz, from the core's counter ([ADR 0017](decisions/0017-device-interrupts-and-the-system-timer.md)) | NeOS stage 6b: the interrupt test |
 

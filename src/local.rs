@@ -3,8 +3,8 @@
 //! (ADRs 0016 and 0017).
 //!
 //! Nebu models core 0's virtual timer interrupt, the BCM2835 line routed to core 0
-//! as an IRQ, and on that line the system timer's comparators 1 and 3 and the PL011
-//! UART's interrupt, 57 (ADR 0018). Every other source must stay off: the local
+//! as an IRQ, and on that line the system timer's comparators 1 and 3, the PL011
+//! UART's interrupt, 57 (ADR 0018), and the EMMC controller's, 62 (ADR 0019). Every other source must stay off: the local
 //! timer, core 0's mailbox interrupts, the FIQ, and every other device interrupt,
 //! which Nebu never raises.
 
@@ -95,13 +95,15 @@ impl Local {
     }
 }
 
-/// The device interrupts Nebu can raise: the system timer's comparators 1 and 3, and
-/// the PL011 UART's. Comparators 0 and 2 are the GPU's on the Pi, and NeOS never
-/// enables them.
-const MODELLED: u64 = 0b1010 | UART;
+/// The device interrupts Nebu can raise: the system timer's comparators 1 and 3, the
+/// PL011 UART's and the EMMC controller's. Comparators 0 and 2 are the GPU's on the
+/// Pi, and NeOS never enables them.
+const MODELLED: u64 = 0b1010 | UART | EMMC;
 
 /// The PL011 UART's interrupt (ADR 0018).
 pub const UART: u64 = 1 << 57;
+/// The Arasan EMMC controller's interrupt (ADR 0019).
+pub const EMMC: u64 = 1 << 62;
 
 /// The BCM2835 controller's state.
 #[derive(Default)]
