@@ -1820,10 +1820,22 @@ mod tests {
             ),
             (0x93cb0dab, Extr { width: W64, rd: 11, rn: 13, rm: 11, lsb: 3 }),
             (0x385ff020, LdrbImmediate { rt: 0, rn: 1, index: Index::Offset, offset: -1 }),
-            (0x38c015cf, LdrsbImmediate { width: W32, rt: 15, rn: 14, index: Index::Post, offset: 1 }),
-            (0x38dffc20, LdrsbImmediate { width: W32, rt: 0, rn: 1, index: Index::Pre, offset: -1 }),
-            (0x39800441, LdrsbImmediate { width: W64, rt: 1, rn: 2, index: Index::Offset, offset: 1 }),
-            (0x38dff020, LdrsbImmediate { width: W32, rt: 0, rn: 1, index: Index::Offset, offset: -1 }),
+            (
+                0x38c015cf,
+                LdrsbImmediate { width: W32, rt: 15, rn: 14, index: Index::Post, offset: 1 },
+            ),
+            (
+                0x38dffc20,
+                LdrsbImmediate { width: W32, rt: 0, rn: 1, index: Index::Pre, offset: -1 },
+            ),
+            (
+                0x39800441,
+                LdrsbImmediate { width: W64, rt: 1, rn: 2, index: Index::Offset, offset: 1 },
+            ),
+            (
+                0x38dff020,
+                LdrsbImmediate { width: W32, rt: 0, rn: 1, index: Index::Offset, offset: -1 },
+            ),
             (0x381ff020, StrbImmediate { rt: 0, rn: 1, index: Index::Offset, offset: -1 }),
             (0x7a572060, CcmpRegister { width: W32, rn: 3, rm: 23, nzcv: 0, condition: 2 }),
             (0xfa4008a4, CcmpImmediate { width: W64, rn: 5, imm: 0, nzcv: 4, condition: 0 }),
