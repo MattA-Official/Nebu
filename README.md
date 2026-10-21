@@ -27,7 +27,7 @@ firmware mailbox, runs the kernel's threads at EL0 with their system calls,
 preempts them with the virtual timer's interrupt, wakes its drivers with the
 system timer's, and takes the exceptions and
 aborts the kernel's tests raise. Its output matches QEMU's byte for byte, including
-the panic path and the kernel's fault reports. It currently implements 90 A64
+the panic path and the kernel's fault reports. It currently implements 93 A64
 instructions, 27 system registers, six kinds of exception and six devices; see
 [`docs/implemented.md`](docs/implemented.md).
 

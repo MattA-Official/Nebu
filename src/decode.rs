@@ -403,6 +403,9 @@ pub enum Instruction {
     /// STRB (register): store the low byte of `rt` to `rn + (rm extended)`.
     /// `rn` 31 is SP; `rt` and `rm` 31 the zero register.
     StrbRegister { rt: u8, rn: u8, rm: u8, extend: Extend },
+    /// LDRSB (immediate): load a byte into `rt`, sign-extended to `width`.
+    /// `rn` 31 is SP, `rt` 31 the zero register.
+    LdrsbImmediate { width: Width, rt: u8, rn: u8, index: Index, offset: i64 },
     /// LDRSB (register): load a byte from `rn + (rm extended)` into `rt`,
     /// sign-extended to `width`. `rn` 31 is SP; `rt` and `rm` 31 the zero register.
     LdrsbRegister { width: Width, rt: u8, rn: u8, rm: u8, extend: Extend },
@@ -852,7 +855,18 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
                     (0b01, 0b01) => {
                         Ok(Instruction::LdrhImmediate { rt, rn, index: Index::Offset, offset })
                     }
-                    _ => Err(DecodeError::Unimplemented), // sign-extending loads
+                    // LDURSB, as LDRSB with an offset.
+                    (0b00, 0b10 | 0b11) => {
+                        let width = Width::from_bit(!opc & 1);
+                        Ok(Instruction::LdrsbImmediate {
+                            width,
+                            rt,
+                            rn,
+                            index: Index::Offset,
+                            offset,
+                        })
+                    }
+                    _ => Err(DecodeError::Unimplemented), // other sign-extending loads
                 };
             }
             (0b00, 0, 0b01) => (Index::Post, sign_extend(bits(word, 20, 12), 9)),
@@ -906,6 +920,11 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
         return match (size, opc) {
             (0b00, 0b00) => Ok(Instruction::StrbImmediate { rt, rn, index, offset }),
             (0b00, 0b01) => Ok(Instruction::LdrbImmediate { rt, rn, index, offset }),
+            // opc 0b10 sign-extends to 64 bits, and 0b11 to 32.
+            (0b00, 0b10 | 0b11) => {
+                let width = Width::from_bit(!opc & 1);
+                Ok(Instruction::LdrsbImmediate { width, rt, rn, index, offset })
+            }
             (0b01, 0b00) => Ok(Instruction::StrhImmediate { rt, rn, index, offset }),
             (0b01, 0b01) => Ok(Instruction::LdrhImmediate { rt, rn, index, offset }),
             (0b10 | 0b11, 0b00) => {
@@ -1468,6 +1487,9 @@ impl fmt::Display for Instruction {
             LdrbImmediate { rt, rn, index, offset } => {
                 write!(f, "ldrb {}, {}", zr(rt, Width::W32), Address { rn, index, offset })
             }
+            LdrsbImmediate { width, rt, rn, index, offset } => {
+                write!(f, "ldrsb {}, {}", zr(rt, width), Address { rn, index, offset })
+            }
             LdrRegister { width, rt, rn, rm, extend, amount } => {
                 let (name, rm_width) = extend_name(extend);
                 write!(
@@ -1798,6 +1820,10 @@ mod tests {
             ),
             (0x93cb0dab, Extr { width: W64, rd: 11, rn: 13, rm: 11, lsb: 3 }),
             (0x385ff020, LdrbImmediate { rt: 0, rn: 1, index: Index::Offset, offset: -1 }),
+            (0x38c015cf, LdrsbImmediate { width: W32, rt: 15, rn: 14, index: Index::Post, offset: 1 }),
+            (0x38dffc20, LdrsbImmediate { width: W32, rt: 0, rn: 1, index: Index::Pre, offset: -1 }),
+            (0x39800441, LdrsbImmediate { width: W64, rt: 1, rn: 2, index: Index::Offset, offset: 1 }),
+            (0x38dff020, LdrsbImmediate { width: W32, rt: 0, rn: 1, index: Index::Offset, offset: -1 }),
             (0x381ff020, StrbImmediate { rt: 0, rn: 1, index: Index::Offset, offset: -1 }),
             (0x7a572060, CcmpRegister { width: W32, rn: 3, rm: 23, nzcv: 0, condition: 2 }),
             (0xfa4008a4, CcmpImmediate { width: W64, rn: 5, imm: 0, nzcv: 4, condition: 0 }),
