@@ -12,7 +12,7 @@ NeOS reads the Pi's SD card from a user-space driver
 ([NeOS ADR 0028](https://github.com/MattA-Official/NeOS/blob/main/docs/decisions/0028-the-sd-card-driver-and-block-protocol.md)).
 What it asks of the machine:
 
-- **The GPIO.** The root task sets pins 34 to 39 to inputs and pins 48 to 53 to
+- **The GPIO.** The driver sets pins 34 to 39 to inputs and pins 48 to 53 to
   alternate function 3, through GPFSEL3, GPFSEL4 and GPFSEL5, reading each first.
   On the Pi this connects the card's slot to the Arasan EMMC controller.
 - **The Arasan EMMC controller** at 0x3F30_0000. The driver resets it through
