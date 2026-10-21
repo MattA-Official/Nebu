@@ -23,6 +23,8 @@ pub struct SystemTimer {
     compare: [u32; 4],
     /// The counter, as of the last time Nebu looked.
     now: u64,
+    /// The core's counter at which this one next counts.
+    next_tick: u64,
 }
 
 impl SystemTimer {
@@ -53,11 +55,16 @@ impl SystemTimer {
     }
 
     /// Moves the counter on to where it is when the core's counter reads `ticks`,
-    /// and marks every comparator whose value the low word passed through.
-    pub fn advance(&mut self, ticks: u64) {
+    /// and marks every comparator whose value the low word passed through. Returns
+    /// whether the counter moved.
+    pub fn advance(&mut self, ticks: u64) -> bool {
+        if ticks < self.next_tick {
+            return false;
+        }
         let now = ticks * TICKS_PER_MICROSECOND.1 / TICKS_PER_MICROSECOND.0;
+        self.next_tick = ((now + 1) * TICKS_PER_MICROSECOND.0).div_ceil(TICKS_PER_MICROSECOND.1);
         if now == self.now {
-            return;
+            return false;
         }
         let passed = now - self.now;
         for (n, &compare) in self.compare.iter().enumerate() {
@@ -67,6 +74,7 @@ impl SystemTimer {
             }
         }
         self.now = now;
+        true
     }
 
     /// Which comparators have matched: the levels of interrupts 0 to 3.

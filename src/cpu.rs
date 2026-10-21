@@ -931,10 +931,11 @@ impl Cpu {
                 let timer = (self.sys.cntv_ctl_el0 & (CNTV_CTL_ENABLE | CNTV_CTL_IMASK)
                     == CNTV_CTL_ENABLE
                     && bus.virtual_timer_routed())
-                .then(|| self.sys.cntv_cval_el0.wrapping_add(self.sys.cntvoff_el2));
+                .then(|| self.sys.cntv_cval_el0.saturating_add(self.sys.cntvoff_el2));
                 match [timer, bus.next_device_interrupt()].into_iter().flatten().min() {
                     // The next step counts one more, and finds the interrupt raised.
-                    Some(due) => self.count = self.count.max(due.wrapping_sub(1)),
+                    // A deadline that has passed is already due.
+                    Some(due) => self.count = self.count.max(due.saturating_sub(1)),
                     None => result = Step::Asleep,
                 }
             }

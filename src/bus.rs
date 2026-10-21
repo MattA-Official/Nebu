@@ -203,14 +203,20 @@ impl Bus {
                 .local
                 .write(offset, value as u32)
                 .ok_or(BusError::DeviceRegister { device, offset }),
-            Some((device @ "interrupt controller", offset)) if size == 4 => self
-                .controller
-                .write(offset, value as u32)
-                .ok_or(BusError::DeviceRegister { device, offset }),
-            Some((device @ "system timer", offset)) if size == 4 => self
-                .system_timer
-                .write(offset, value as u32)
-                .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "interrupt controller", offset)) if size == 4 => {
+                self.controller
+                    .write(offset, value as u32)
+                    .ok_or(BusError::DeviceRegister { device, offset })?;
+                self.update_gpu_line();
+                Ok(())
+            }
+            Some((device @ "system timer", offset)) if size == 4 => {
+                self.system_timer
+                    .write(offset, value as u32)
+                    .ok_or(BusError::DeviceRegister { device, offset })?;
+                self.update_gpu_line();
+                Ok(())
+            }
             Some((device @ "mailbox", offset)) if size == 4 => {
                 match self.mailbox.write(offset, value as u32).map_err(BusError::Mailbox)? {
                     Some(Request::Property { address }) => self.answer_property(address),
@@ -230,7 +236,15 @@ impl Bus {
     /// Moves the devices on to the time when the core's counter reads `ticks`, and
     /// raises or lowers the BCM2835 line to match (ADR 0017).
     pub fn advance(&mut self, ticks: u64) {
-        self.system_timer.advance(ticks);
+        if self.system_timer.advance(ticks) {
+            self.update_gpu_line();
+        }
+    }
+
+    /// Raises the BCM2835 line while an enabled interrupt is raised. The levels and
+    /// the enables change only when the system timer counts or either device is
+    /// written.
+    fn update_gpu_line(&mut self) {
         self.local.set_gpu(self.device_levels() & self.controller.enabled() != 0);
     }
 
