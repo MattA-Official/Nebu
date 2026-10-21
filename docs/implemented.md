@@ -121,8 +121,8 @@ as LDRH and STRH ([ADR 0014](decisions/0014-threads-and-address-spaces.md)).
 | MPIDR_EL1   | Read       | `0x8000_0000` (core 0)                      | NeOS step 2: boot            |
 | CurrentEL   | Read       | The current EL                              | NeOS step 2: boot            |
 | HCR_EL2     | Read/write | Only RW may be set                          | NeOS stage 1: dropping to EL1 |
-| CNTHCTL_EL2 | Read/write | Stored only: there are no timers yet        | NeOS stage 1: dropping to EL1 |
-| CNTVOFF_EL2 | Read/write | Stored only                                 | NeOS stage 1: dropping to EL1 |
+| CNTHCTL_EL2 | Read/write | Stored only                                 | NeOS stage 1: dropping to EL1 |
+| CNTVOFF_EL2 | Read/write | Subtracted from the counter to give CNTVCT_EL0 | NeOS stage 1: dropping to EL1; stage 6a: the timer |
 | SCTLR_EL1   | Read/write | Only M, C, SA, SA0 and I besides the RES1 bits | NeOS stage 1: dropping to EL1; stage 2: MMU |
 | SPSR_EL2, ELR_EL2 | Read/write | Used by `eret` at EL2                 | NeOS stage 1: dropping to EL1 |
 | SP_EL1      | Read/write | From EL2                                    | NeOS stage 1: dropping to EL1 |
@@ -137,10 +137,16 @@ as LDRH and STRH ([ADR 0014](decisions/0014-threads-and-address-spaces.md)).
 | CPACR_EL1   | Read/write | Only 0 (FP and SIMD trap) may be written    | NeOS stage 3: trapping floating point |
 | CTR_EL0     | Read       | `0x8444_8004`: 64-byte cache lines; EL1 and above only | NeOS stage 4: cleaning the data cache |
 | TPIDR_EL0   | Read/write | From EL0 too                                | NeOS stage 5a: saving a thread's registers |
+| CNTFRQ_EL0  | Read       | 62,500,000, as QEMU's `raspi3b` reports     | NeOS stage 6a: the timer     |
+| CNTVCT_EL0  | Read       | One count for each instruction run          | NeOS stage 6a: the timer     |
+| CNTV_CTL_EL0 | Read/write | ENABLE and IMASK; ISTATUS reads            | NeOS stage 6a: the timer     |
+| CNTV_CVAL_EL0 | Read/write | The virtual timer's deadline              | NeOS stage 6a: the timer     |
+| CNTKCTL_EL1 | Read/write | Only 0: EL0 cannot reach the counter or timers | NeOS stage 6a: the timer  |
 
 Accessing a register from a lower EL than the table allows halts Nebu, because
 hardware would trap. EL1 registers need EL1 or above, and EL2 registers need EL2.
-TPIDR_EL0 is the one register EL0 may use.
+TPIDR_EL0 is the one register EL0 may use. The timer's registers need EL1, as
+CNTKCTL_EL1 = 0 makes them on hardware ([ADR 0016](decisions/0016-the-timer-and-interrupts.md)).
 
 ## Exceptions
 
@@ -151,11 +157,14 @@ TPIDR_EL0 is the one register EL0 may use.
 | Instruction abort          | 0x20, 0x21 | NeOS stage 2: MMU      |
 | Data abort                 | 0x24, 0x25 | NeOS stage 2: MMU test |
 | Supervisor call (`svc`)    | 0x15  | NeOS stage 3: system calls |
+| IRQ, from the virtual timer | none | NeOS stage 6a: preemption |
 
 All are taken to EL1. Any other exception halts Nebu
 ([ADRs 0008](decisions/0008-exception-levels-and-exceptions.md),
 [0009](decisions/0009-the-mmu.md) and [0010](decisions/0010-el0-and-system-calls.md)).
-Exceptions from EL0 use the vectors at offset 0x400.
+Exceptions from EL0 use the vectors at offset 0x400. IRQs are taken between
+instructions while PSTATE.I is clear, at the IRQ vectors 0x80 after the synchronous
+ones, and leave ESR_EL1 as it was ([ADR 0016](decisions/0016-the-timer-and-interrupts.md)).
 
 ## Address translation
 
@@ -173,6 +182,8 @@ the tables ([ADR 0009](decisions/0009-the-mmu.md)).
 | PL011 UART        | DR (read): received bytes, from standard input    | NeOS step 3: chainloader |
 | GPIO              | GPFSEL1, GPPUD, GPPUDCLK0 (read and write)        | NeOS step 3: routing the UART to the pins |
 | Mailbox           | Mailbox 0's READ and STATUS, mailbox 1's WRITE; channel 8 with the GET_ARM_MEMORY tag only ([ADR 0011](decisions/0011-the-firmware-mailbox.md)) | NeOS stage 4: how much memory there is |
+| Interrupt controller | DISABLE_IRQS_1, DISABLE_IRQS_2, DISABLE_BASIC_IRQS (write) at 0x3F00_B21C to 0x3F00_B224 | NeOS stage 6a: turning off what is not used |
+| Local peripherals | At 0x4000_0000: the local timer's control and core 0's mailbox interrupt control (write 0 only); core 0's timer interrupt control (0 or the virtual timer); core 0's IRQ source (read) ([ADR 0016](decisions/0016-the-timer-and-interrupts.md)) | NeOS stage 6a: the timer's interrupt |
 
 ## Semihosting
 

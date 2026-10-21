@@ -134,6 +134,16 @@ pub enum SystemRegister {
     CtrEl0,
     /// EL0's thread pointer register, which EL0 can read and write.
     TpidrEl0,
+    /// The rate the generic timer's counter counts at, in Hz.
+    CntfrqEl0,
+    /// The generic timer's virtual counter.
+    CntvctEl0,
+    /// The virtual timer's control register: whether it is on, masked or firing.
+    CntvCtlEl0,
+    /// The virtual timer's comparator: the count at which it fires.
+    CntvCvalEl0,
+    /// What EL0 may do with the counter and the timers.
+    CntkctlEl1,
 }
 
 impl SystemRegister {
@@ -162,6 +172,11 @@ impl SystemRegister {
             (3, 0, 1, 0, 2) => SystemRegister::CpacrEl1,
             (3, 3, 0, 0, 1) => SystemRegister::CtrEl0,
             (3, 3, 13, 0, 2) => SystemRegister::TpidrEl0,
+            (3, 3, 14, 0, 0) => SystemRegister::CntfrqEl0,
+            (3, 3, 14, 0, 2) => SystemRegister::CntvctEl0,
+            (3, 3, 14, 3, 1) => SystemRegister::CntvCtlEl0,
+            (3, 3, 14, 3, 2) => SystemRegister::CntvCvalEl0,
+            (3, 0, 14, 1, 0) => SystemRegister::CntkctlEl1,
             _ => return None,
         })
     }
@@ -191,6 +206,11 @@ impl SystemRegister {
             SystemRegister::CpacrEl1 => "CPACR_EL1",
             SystemRegister::CtrEl0 => "CTR_EL0",
             SystemRegister::TpidrEl0 => "TPIDR_EL0",
+            SystemRegister::CntfrqEl0 => "CNTFRQ_EL0",
+            SystemRegister::CntvctEl0 => "CNTVCT_EL0",
+            SystemRegister::CntvCtlEl0 => "CNTV_CTL_EL0",
+            SystemRegister::CntvCvalEl0 => "CNTV_CVAL_EL0",
+            SystemRegister::CntkctlEl1 => "CNTKCTL_EL1",
         }
     }
 }
@@ -1650,6 +1670,11 @@ mod tests {
             (0xd51c1101, Msr { register: SystemRegister::HcrEl2, rt: 1 }),
             (0xd53ce101, Mrs { rt: 1, register: SystemRegister::CnthctlEl2 }),
             (0xd51ce07f, Msr { register: SystemRegister::CntvoffEl2, rt: 31 }),
+            (0xd53be000, Mrs { rt: 0, register: SystemRegister::CntfrqEl0 }),
+            (0xd53be040, Mrs { rt: 0, register: SystemRegister::CntvctEl0 }),
+            (0xd51be321, Msr { register: SystemRegister::CntvCtlEl0, rt: 1 }),
+            (0xd51be340, Msr { register: SystemRegister::CntvCvalEl0, rt: 0 }),
+            (0xd518e11f, Msr { register: SystemRegister::CntkctlEl1, rt: 31 }),
             (0xd5181001, Msr { register: SystemRegister::SctlrEl1, rt: 1 }),
             (0xd51c4001, Msr { register: SystemRegister::SpsrEl2, rt: 1 }),
             (0xd51c4021, Msr { register: SystemRegister::ElrEl2, rt: 1 }),

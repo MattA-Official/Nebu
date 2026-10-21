@@ -6,11 +6,18 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::gpio::Gpio;
+use crate::local::{self, Local};
 use crate::mailbox::{self, Mailbox, Request};
 use crate::pl011::Pl011;
 
 /// RAM occupies the bottom of the address space, up to the peripherals.
 const RAM_END: u64 = 0x3F00_0000;
+/// The BCM2835 interrupt controller, and the size of its register window.
+const INTERRUPT_CONTROLLER_BASE: u64 = 0x3F00_B200;
+const INTERRUPT_CONTROLLER_WINDOW: u64 = 0x28;
+/// The BCM2836 local peripherals, and the size of their register window.
+const LOCAL_BASE: u64 = 0x4000_0000;
+const LOCAL_WINDOW: u64 = 0x100;
 /// The VideoCore mailboxes.
 const MAILBOX_BASE: u64 = 0x3F00_B880;
 /// The size of the mailboxes' register window: mailbox 0, then mailbox 1.
@@ -82,12 +89,19 @@ pub struct Bus {
     gpio: Gpio,
     uart: Pl011,
     mailbox: Mailbox,
+    local: Local,
 }
 
 impl Bus {
     /// Creates a bus with empty RAM, GPIO in its reset state and the given UART.
     pub fn new(uart: Pl011) -> Self {
-        Bus { ram: Ram::default(), gpio: Gpio::default(), uart, mailbox: Mailbox::default() }
+        Bus {
+            ram: Ram::default(),
+            gpio: Gpio::default(),
+            uart,
+            mailbox: Mailbox::default(),
+            local: Local::default(),
+        }
     }
 
     /// Copies `bytes` into RAM at `address`, as the firmware does with the kernel image.
@@ -131,6 +145,11 @@ impl Bus {
                 .read(offset)
                 .map(u64::from)
                 .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "local peripherals", offset)) if size == 4 => self
+                .local
+                .read(offset)
+                .map(u64::from)
+                .ok_or(BusError::DeviceRegister { device, offset }),
             Some((device @ "mailbox", offset)) if size == 4 => self
                 .mailbox
                 .read(offset)
@@ -162,6 +181,13 @@ impl Bus {
                 .uart
                 .write(offset, value as u32)
                 .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "local peripherals", offset)) if size == 4 => self
+                .local
+                .write(offset, value as u32)
+                .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "interrupt controller", offset)) if size == 4 => {
+                local::write_controller(offset).ok_or(BusError::DeviceRegister { device, offset })
+            }
             Some((device @ "mailbox", offset)) if size == 4 => {
                 match self.mailbox.write(offset, value as u32).map_err(BusError::Mailbox)? {
                     Some(Request::Property { address }) => self.answer_property(address),
@@ -171,6 +197,16 @@ impl Bus {
             Some((device, offset)) => Err(BusError::DeviceRegister { device, offset }),
             None => Err(BusError::Unmapped),
         }
+    }
+
+    /// Records whether core 0's virtual timer is raising its interrupt (ADR 0016).
+    pub fn set_virtual_timer(&mut self, raised: bool) {
+        self.local.set_virtual_timer(raised);
+    }
+
+    /// Whether core 0 has an IRQ pending.
+    pub fn irq_pending(&self) -> bool {
+        self.local.irq_pending()
     }
 
     /// Answers the property message at `address` in RAM, as the firmware would.
@@ -202,6 +238,14 @@ impl Bus {
 
 /// Finds the device whose registers include `address`, and the offset within it.
 fn device_at(address: u64) -> Option<(&'static str, u64)> {
+    let interrupt_controller =
+        INTERRUPT_CONTROLLER_BASE..INTERRUPT_CONTROLLER_BASE + INTERRUPT_CONTROLLER_WINDOW;
+    if interrupt_controller.contains(&address) {
+        return Some(("interrupt controller", address - INTERRUPT_CONTROLLER_BASE));
+    }
+    if (LOCAL_BASE..LOCAL_BASE + LOCAL_WINDOW).contains(&address) {
+        return Some(("local peripherals", address - LOCAL_BASE));
+    }
     if (MAILBOX_BASE..MAILBOX_BASE + MAILBOX_WINDOW).contains(&address) {
         return Some(("mailbox", address - MAILBOX_BASE));
     }
