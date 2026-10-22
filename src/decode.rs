@@ -320,6 +320,11 @@ pub enum Instruction {
     Umulh { rd: u8, rn: u8, rm: u8 },
     /// MSUB: `rd = ra - rn * rm`, keeping the low bits. 31 is the zero register.
     Msub { width: Width, rd: u8, rn: u8, rm: u8, ra: u8 },
+    /// SMADDL, SMSUBL, UMADDL and UMSUBL: `rd = ra + rn * rm`, or `ra - rn * rm` if
+    /// `subtract`, where `rn` and `rm` are 32-bit registers, sign-extended if
+    /// `signed` and zero-extended if not, and `rd` and `ra` are 64-bit. 31 is the
+    /// zero register.
+    MulLong { rd: u8, rn: u8, rm: u8, ra: u8, signed: bool, subtract: bool },
     /// CSINC: `rd = if condition holds { rn } else { rm + 1 }`. 31 is the zero register.
     Csinc { width: Width, rd: u8, rn: u8, rm: u8, condition: u8 },
     /// CSINV: `rd = if condition holds { rn } else { !rm }`. 31 is the zero register.
@@ -946,7 +951,8 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
 }
 
 fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
-    // Data-processing (3 source). Only MADD and MSUB (op54 = 00, op31 = 000), and
+    // Data-processing (3 source). Only MADD and MSUB (op54 = 00, op31 = 000), the
+    // widening SMADDL and SMSUBL (op31 = 001) and UMADDL and UMSUBL (op31 = 101), and
     // UMULH (op31 = 110).
     if bits(word, 28, 24) == 0b11011 {
         let width = Width::from_bit(bits(word, 31, 31));
@@ -967,6 +973,14 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
                 rn: reg(word, 5),
                 rm: reg(word, 16),
                 ra: reg(word, 10),
+            }),
+            (0b00, op31 @ (0b001 | 0b101), o0) if width == Width::W64 => Ok(Instruction::MulLong {
+                rd: reg(word, 0),
+                rn: reg(word, 5),
+                rm: reg(word, 16),
+                ra: reg(word, 10),
+                signed: op31 == 0b001,
+                subtract: o0 == 1,
             }),
             _ => Err(DecodeError::Unimplemented),
         };
@@ -1408,6 +1422,16 @@ impl fmt::Display for Instruction {
                 zr(rm, width),
                 zr(ra, width)
             ),
+            MulLong { rd, rn, rm, ra, signed, subtract } => write!(
+                f,
+                "{}m{}l {}, {}, {}, {}",
+                if signed { "s" } else { "u" },
+                if subtract { "sub" } else { "add" },
+                zr(rd, Width::W64),
+                zr(rn, Width::W32),
+                zr(rm, Width::W32),
+                zr(ra, Width::W64)
+            ),
             Csinv { width, rd, rn, rm, condition } => write!(
                 f,
                 "csinv {}, {}, {}, {}",
@@ -1808,6 +1832,15 @@ mod tests {
             ),
             (0x9bc97c29, Umulh { rd: 9, rn: 1, rm: 9 }),
             (0x1b09d108, Msub { width: W32, rd: 8, rn: 8, rm: 9, ra: 20 }),
+            // The file system: `umull x11, w24, w19`, which is UMADDL with the zero
+            // register, and the other three forms.
+            (
+                0x9bb37f0b,
+                MulLong { rd: 11, rn: 24, rm: 19, ra: 31, signed: false, subtract: false },
+            ),
+            (0x9ba28c20, MulLong { rd: 0, rn: 1, rm: 2, ra: 3, signed: false, subtract: true }),
+            (0x9b220c20, MulLong { rd: 0, rn: 1, rm: 2, ra: 3, signed: true, subtract: false }),
+            (0x9b228c20, MulLong { rd: 0, rn: 1, rm: 2, ra: 3, signed: true, subtract: true }),
             // Stage 4: capabilities.
             (
                 0x6b21011f,
