@@ -34,7 +34,7 @@ const FAULT_EXIT_CODE: u8 = 70;
 
 const USAGE: &str = "\
 usage: nebu [--semihosting] [--trace] [--sd <card.img>] [--load <file>@<address>]...
-            <kernel8.img>
+            [--screen <file.ppm>] <kernel8.img>
 
   --semihosting  let `hlt #0xf000` make semihosting calls, as QEMU's -semihosting does
   --trace        print every instruction to standard error before running it
@@ -43,13 +43,17 @@ usage: nebu [--semihosting] [--trace] [--sd <card.img>] [--load <file>@<address>
   --load <file>@<address>
                  copy <file> into memory at <address> (hexadecimal, with 0x)
                  before starting, as the firmware does with config.txt's
-                 initramfs, and QEMU with -device loader";
+                 initramfs, and QEMU with -device loader
+  --screen <file.ppm>
+                 when the machine stops, save what the screen shows to <file.ppm>,
+                 as QEMU's screendump does";
 
 fn main() -> ExitCode {
     let mut semihosting = false;
     let mut trace = false;
     let mut card = None;
     let mut loads = Vec::new();
+    let mut screen = None;
     let mut image = None;
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -58,6 +62,13 @@ fn main() -> ExitCode {
             "--trace" => trace = true,
             "--sd" if card.is_none() => match arguments.next() {
                 Some(path) => card = Some(path),
+                None => {
+                    eprintln!("{USAGE}");
+                    return ExitCode::from(2);
+                }
+            },
+            "--screen" if screen.is_none() => match arguments.next() {
+                Some(path) => screen = Some(path),
                 None => {
                     eprintln!("{USAGE}");
                     return ExitCode::from(2);
@@ -117,8 +128,13 @@ fn main() -> ExitCode {
     loop {
         match cpu.step(&mut bus, trace) {
             Ok(Step::Continue) => {}
-            Ok(Step::Exit(code)) => return ExitCode::from(code as u8),
+            Ok(Step::Exit(code)) => {
+                save_screen(&bus, screen.as_deref());
+                return ExitCode::from(code as u8);
+            }
             Ok(Step::Asleep) => {
+                // Nothing will change the screen now, so it is saved before waiting.
+                save_screen(&bus, screen.as_deref());
                 // Nothing in Nebu can send an event, and no interrupt is due or can be
                 // raised by input, so the core sleeps forever, as it would in QEMU.
                 eprintln!("nebu: core 0 is waiting for something that nothing can send");
@@ -130,9 +146,27 @@ fn main() -> ExitCode {
             Err(fault) => {
                 eprintln!("nebu: stopped at pc {:#010x}: {fault}", cpu.pc);
                 dump_registers(&cpu);
+                save_screen(&bus, screen.as_deref());
                 return ExitCode::from(FAULT_EXIT_CODE);
             }
         }
+    }
+}
+
+/// Saves what the screen shows to `path`, if one was asked for, as a binary PPM
+/// image (ADR 0023). With no framebuffer, it says so and saves nothing.
+fn save_screen(bus: &Bus, path: Option<&str>) {
+    let Some(path) = path else {
+        return;
+    };
+    let Some((width, height, pixels)) = bus.screen() else {
+        eprintln!("nebu: no screen to save: the firmware was never asked for a framebuffer");
+        return;
+    };
+    let mut image = format!("P6\n{width} {height}\n255\n").into_bytes();
+    image.extend_from_slice(&pixels);
+    if let Err(error) = fs::write(path, image) {
+        eprintln!("nebu: cannot save the screen to {path}: {error}");
     }
 }
 
