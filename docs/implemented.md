@@ -56,6 +56,7 @@ all addressing modes.
 | LDRB (immediate)             | NeOS step 2: panic path      |
 | LDRB (register)              | NeOS step 2: panic path      |
 | LDRH (immediate)             | NeOS stage 5a: ASIDs         |
+| LDRH (register)              | NeOS's unsafe code audit: the kernel window as a constant |
 | LDRSB (immediate)            | NeOS's shell: comparing strings ([ADR 0020](decisions/0020-ldrsb-immediate.md)) |
 | LDRSB (register)             | NeOS stage 7: checking UTF-8 ([ADR 0018](decisions/0018-the-uarts-interrupts.md)) |
 | LDRSW (register)             | NeOS stage 5b: the ipc test's jump tables |
@@ -198,7 +199,7 @@ the tables ([ADR 0009](decisions/0009-the-mmu.md)).
 | GPIO              | GPFSEL1, GPPUD, GPPUDCLK0 (read and write)        | NeOS step 3: routing the UART to the pins |
 | GPIO              | GPFSEL3, GPFSEL4, GPFSEL5, GPPUDCLK1 (read and write); the card answers only while pins 48 to 53 are all alternate function 3 ([ADR 0019](decisions/0019-the-sd-card.md)) | The SD card driver: switching the card's pins and their pull-ups |
 | EMMC controller   | At 0x3F30_0000: BLKSIZECNT, ARG1, CONTROL1, INTERRUPT (write 1 to clear), IRPT_MASK, IRPT_EN (read and write); CMDTM (write: runs the command at once); RESP0 to RESP3, DATA, STATUS (read); interrupt 62. The card: CMD0, 2, 3, 7, 8, 9, 17 and 55, and ACMD41, on a high-capacity image read with `--sd` ([ADR 0019](decisions/0019-the-sd-card.md)) | The SD card driver |
-| Mailbox           | Mailbox 0's READ and STATUS, mailbox 1's WRITE; channel 8 with the GET_ARM_MEMORY tag only ([ADR 0011](decisions/0011-the-firmware-mailbox.md)) | NeOS stage 4: how much memory there is |
+| Mailbox           | Mailbox 0's READ and STATUS, mailbox 1's WRITE and STATUS (never full); channel 8 with the GET_ARM_MEMORY tag only ([ADR 0011](decisions/0011-the-firmware-mailbox.md)) | NeOS stage 4: how much memory there is |
 | Interrupt controller | DISABLE_IRQS_1, DISABLE_IRQS_2, DISABLE_BASIC_IRQS (write) at 0x3F00_B21C to 0x3F00_B224 | NeOS stage 6a: turning off what is not used |
 | Interrupt controller | IRQ_PENDING_1 and 2 (read: raised interrupts), FIQ control (write 0 only), ENABLE_IRQS_1 (write: interrupts 1 and 3 only) and ENABLE_IRQS_2 (write: interrupts 57, the UART's, and 62, the EMMC controller's, only) ([ADRs 0017](decisions/0017-device-interrupts-and-the-system-timer.md) and [0018](decisions/0018-the-uarts-interrupts.md)) | NeOS stages 6b and 7: drivers' interrupts |
 | Local peripherals | At 0x4000_0000: the GPU routing, the local timer's control and core 0's mailbox interrupt control (write 0 only); core 0's timer interrupt control (0 or the virtual timer); core 0's IRQ source (read: the virtual timer and the BCM2835 line) ([ADRs 0016](decisions/0016-the-timer-and-interrupts.md) and [0017](decisions/0017-device-interrupts-and-the-system-timer.md)) | NeOS stages 6a and 6b: interrupts |
