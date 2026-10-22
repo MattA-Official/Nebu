@@ -7,9 +7,9 @@
 
 NeOS now boots on its own when no PC answers the chainloader
 ([NeOS ADR 0031](https://github.com/MattA-Official/NeOS/blob/main/docs/decisions/0031-booting-without-a-pc.md)).
-On the Pi, `config.txt`'s `initramfs neoskern.img 0x3000000` has the firmware load the
+On the Pi, `config.txt`'s `initramfs neos.img 0x3000000` has the firmware load the
 card's kernel at 48 MiB before the chainloader starts. QEMU does the same with its
-generic loader, `-device loader,file=neoskern.img,addr=0x3000000`. Nebu loads only
+generic loader, `-device loader,file=neos.img,addr=0x3000000`. Nebu loads only
 `kernel8.img`, at 0x80000, so it cannot run the new `standalone` scenarios.
 
 ## Options
@@ -17,7 +17,7 @@ generic loader, `-device loader,file=neoskern.img,addr=0x3000000`. Nebu loads on
 - **Read `config.txt` from the SD card image**, as the firmware does. Truest to the
   Pi, but Nebu would need a FAT32 reader and a parser for `config.txt`, only to find
   one line, and QEMU, the reference, does not do it either.
-- **A fixed second file**, such as `neoskern.img` next to `kernel8.img`. No option to
+- **A fixed second file**, such as `neos.img` next to `kernel8.img`. No option to
   add, but a hidden rule the tests would have to know about, and fixed to one
   address.
 - **An option naming a file and an address** _(chosen)_: `--load <file>@<address>`,
