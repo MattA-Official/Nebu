@@ -1,6 +1,6 @@
 # 0022. Loading a second file into memory
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-22
 
 ## Context

@@ -35,4 +35,4 @@ works live here.
 | 0019 | [The SD card](0019-the-sd-card.md) | Accepted |
 | 0020 | [LDRSB (immediate)](0020-ldrsb-immediate.md) | Accepted |
 | 0021 | [Widening multiplies](0021-widening-multiplies.md) | Accepted |
-| 0022 | [Loading a second file into memory](0022-loading-a-second-file.md) | Proposed |
+| 0022 | [Loading a second file into memory](0022-loading-a-second-file.md) | Accepted |
