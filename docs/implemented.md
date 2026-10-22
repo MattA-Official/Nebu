@@ -93,6 +93,7 @@ all addressing modes.
 | STURB                        | NeOS stage 3: loading the root task |
 | STURH                        | NeOS stage 5a: ASIDs         |
 | SUB (immediate)              | NeOS step 2: boot            |
+| SUB (extended register)      | NeOS ADR 0033: the vector table's stack check |
 | SUB (shifted register)       | NeOS stage 2: MMU            |
 | SUBS (extended register)     | NeOS stage 4: capability test |
 | SUBS (immediate)             | NeOS step 2: panic path      |
@@ -149,6 +150,7 @@ LDURSB as LDRSB ([ADR 0020](decisions/0020-ldrsb-immediate.md)).
 | CPACR_EL1   | Read/write | Only 0 (FP and SIMD trap) may be written    | NeOS stage 3: trapping floating point |
 | CTR_EL0     | Read       | `0x8444_8004`: 64-byte cache lines; EL1 and above only | NeOS stage 4: cleaning the data cache |
 | TPIDR_EL0   | Read/write | From EL0 too                                | NeOS stage 5a: saving a thread's registers |
+| TPIDR_EL1   | Read/write |                                             | NeOS ADR 0033: the vector table's stack check |
 | CNTFRQ_EL0  | Read       | 62,500,000, as QEMU's `raspi3b` reports     | NeOS stage 6a: the timer     |
 | CNTVCT_EL0  | Read       | One count for each instruction run          | NeOS stage 6a: the timer     |
 | CNTV_CTL_EL0 | Read/write | ENABLE and IMASK; ISTATUS reads            | NeOS stage 6a: the timer     |

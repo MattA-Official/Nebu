@@ -134,6 +134,8 @@ pub enum SystemRegister {
     CtrEl0,
     /// EL0's thread pointer register, which EL0 can read and write.
     TpidrEl0,
+    /// EL1's thread pointer register: a scratch register for the kernel.
+    TpidrEl1,
     /// The rate the generic timer's counter counts at, in Hz.
     CntfrqEl0,
     /// The generic timer's virtual counter.
@@ -172,6 +174,7 @@ impl SystemRegister {
             (3, 0, 1, 0, 2) => SystemRegister::CpacrEl1,
             (3, 3, 0, 0, 1) => SystemRegister::CtrEl0,
             (3, 3, 13, 0, 2) => SystemRegister::TpidrEl0,
+            (3, 0, 13, 0, 4) => SystemRegister::TpidrEl1,
             (3, 3, 14, 0, 0) => SystemRegister::CntfrqEl0,
             (3, 3, 14, 0, 2) => SystemRegister::CntvctEl0,
             (3, 3, 14, 3, 1) => SystemRegister::CntvCtlEl0,
@@ -206,6 +209,7 @@ impl SystemRegister {
             SystemRegister::CpacrEl1 => "CPACR_EL1",
             SystemRegister::CtrEl0 => "CTR_EL0",
             SystemRegister::TpidrEl0 => "TPIDR_EL0",
+            SystemRegister::TpidrEl1 => "TPIDR_EL1",
             SystemRegister::CntfrqEl0 => "CNTFRQ_EL0",
             SystemRegister::CntvctEl0 => "CNTVCT_EL0",
             SystemRegister::CntvCtlEl0 => "CNTV_CTL_EL0",
@@ -280,6 +284,10 @@ pub enum Instruction {
     /// `amount`)`. `rd` and `rn` 31 are SP, `rm` 31 is the zero register. `option` is
     /// as for SUBS.
     AddExtendedRegister { width: Width, rd: u8, rn: u8, rm: u8, option: u8, amount: u8 },
+    /// SUB (extended register): `rd = rn - (rm extended by `option`, shifted left by
+    /// `amount`)`. `rd` and `rn` 31 are SP, `rm` 31 is the zero register. `option` is
+    /// as for SUBS.
+    SubExtendedRegister { width: Width, rd: u8, rn: u8, rm: u8, option: u8, amount: u8 },
     /// SUBS (extended register): `rd = rn - (rm extended by `option`, shifted left
     /// by `amount`)`, setting the flags. `rd` 31 is the zero register, `rn` 31 is SP,
     /// `rm` 31 is the zero register. `option` is the field's value: UXTB, UXTH,
@@ -1042,7 +1050,7 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
         };
     }
 
-    // Add/subtract (extended register). Only ADD and SUBS.
+    // Add/subtract (extended register). Only ADD, SUB and SUBS.
     if bits(word, 28, 21) == 0b0101_1001 {
         let width = Width::from_bit(bits(word, 31, 31));
         let (option, amount) = (bits(word, 15, 13) as u8, bits(word, 12, 10) as u8);
@@ -1052,8 +1060,9 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
         let (rd, rn, rm) = (reg(word, 0), reg(word, 5), reg(word, 16));
         return match bits(word, 30, 29) {
             0b00 => Ok(Instruction::AddExtendedRegister { width, rd, rn, rm, option, amount }),
+            0b10 => Ok(Instruction::SubExtendedRegister { width, rd, rn, rm, option, amount }),
             0b11 => Ok(Instruction::SubsExtendedRegister { width, rd, rn, rm, option, amount }),
-            _ => Err(DecodeError::Unimplemented), // ADDS and SUB
+            _ => Err(DecodeError::Unimplemented), // ADDS
         };
     }
 
@@ -1345,6 +1354,13 @@ impl fmt::Display for Instruction {
             AddExtendedRegister { width, rd, rn, rm, option, amount } => write!(
                 f,
                 "add {}, {}, {}",
+                sp(rd, width),
+                sp(rn, width),
+                Extended { rm, option, amount }
+            ),
+            SubExtendedRegister { width, rd, rn, rm, option, amount } => write!(
+                f,
+                "sub {}, {}, {}",
                 sp(rd, width),
                 sp(rn, width),
                 Extended { rm, option, amount }
@@ -1873,6 +1889,13 @@ mod tests {
                 0x8b30212e,
                 AddExtendedRegister { width: W64, rd: 14, rn: 9, rm: 16, option: 1, amount: 0 },
             ),
+            // NeOS ADR 0033: the vector table's stack check.
+            (0xd518d080, Msr { register: SystemRegister::TpidrEl1, rt: 0 }),
+            (0xd538d080, Mrs { rt: 0, register: SystemRegister::TpidrEl1 }),
+            (
+                0xcb2063e0,
+                SubExtendedRegister { width: W64, rd: 0, rn: 31, rm: 0, option: 3, amount: 0 },
+            ),
             (0xba490962, CcmnImmediate { width: W64, rn: 11, imm: 9, nzcv: 2, condition: 0 }),
             (
                 0xf85f016e,
@@ -1969,6 +1992,7 @@ mod tests {
         assert_eq!(decode(0xd5088748).unwrap().to_string(), "tlbi aside1, x8");
         assert_eq!(decode(0x79402108).unwrap().to_string(), "ldrh w8, [x8, #0x10]");
         assert_eq!(decode(0xd51bd048).unwrap().to_string(), "msr TPIDR_EL0, x8");
+        assert_eq!(decode(0xcb2063e0).unwrap().to_string(), "sub x0, sp, x0, uxtx #0");
         assert_eq!(decode(0xd50b7e28).unwrap().to_string(), "dc civac, x8");
         assert_eq!(decode(0x7a572060).unwrap().to_string(), "ccmp w3, w23, #0x0, hs");
         assert_eq!(decode(0xfa4008a4).unwrap().to_string(), "ccmp x5, #0x0, #0x4, eq");
@@ -1985,8 +2009,8 @@ mod tests {
         assert_eq!(decode(0xd503209f), Err(DecodeError::Unimplemented)); // sev
         assert_eq!(decode(0x1e202008), Err(DecodeError::Unimplemented)); // fcmp s0, s0
         assert_eq!(
-            decode(0xd538d080), // mrs x0, TPIDR_EL1
-            Err(DecodeError::SystemRegister { op0: 3, op1: 0, crn: 13, crm: 0, op2: 4 })
+            decode(0xd53bd060), // mrs x0, TPIDRRO_EL0
+            Err(DecodeError::SystemRegister { op0: 3, op1: 3, crn: 13, crm: 0, op2: 3 })
         );
     }
 
