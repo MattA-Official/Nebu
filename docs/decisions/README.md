@@ -36,4 +36,4 @@ works live here.
 | 0020 | [LDRSB (immediate)](0020-ldrsb-immediate.md) | Accepted |
 | 0021 | [Widening multiplies](0021-widening-multiplies.md) | Accepted |
 | 0022 | [Loading a second file into memory](0022-loading-a-second-file.md) | Accepted |
-| 0023 | [The framebuffer](0023-the-framebuffer.md) | Proposed |
+| 0023 | [The framebuffer](0023-the-framebuffer.md) | Accepted |

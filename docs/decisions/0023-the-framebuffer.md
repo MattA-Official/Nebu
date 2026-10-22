@@ -1,6 +1,6 @@
 # 0023. The framebuffer
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-22
 - **Amends:** [0011](0011-the-firmware-mailbox.md), decision 3 (only GET_ARM_MEMORY
   is answered)
