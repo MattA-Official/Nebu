@@ -164,6 +164,8 @@ fn answer(message: &mut [u32], framebuffer: &mut Framebuffer) -> Result<(), &'st
                 }
                 framebuffer.width = width;
                 framebuffer.height = height;
+                // A buffer allocated for the old size no longer fits the screen.
+                framebuffer.allocated = false;
                 8
             }
             SET_VIRTUAL_SIZE if size >= 8 => {

@@ -56,14 +56,17 @@ what NeOS drew.
    pixel; the bus address 0x3C10_0000 and the size, the pitch times the height) and
    "get pitch" (the width times 4). Anything else stops Nebu, naming what it cannot
    do.
+   Setting the physical size again after "allocate buffer" undoes the allocation, so
+   the buffer must be allocated again for the new size.
 2. `--screen <file.ppm>` saves the framebuffer as a binary PPM (`P6`) image when the
-   machine stops: on a semihosting exit, or when Nebu stops at something it cannot
-   emulate, so that the screen can help work out what happened. If no buffer was
-   ever allocated, Nebu says so on standard error and saves nothing.
-3. Pixels are read from RAM as little-endian 32-bit words. With pixel order RGB, red
-   is the word's bits 23:16 and blue bits 7:0; with BGR, the other way round. NeOS
-   draws only greys so far, in which the two are the same, so this order has not
-   been checked against the Pi or QEMU yet.
+   machine stops: on a semihosting exit, when Nebu stops at something it cannot
+   emulate, or when the core goes to sleep with nothing to wake it, so that the
+   screen can help work out what happened. If no buffer is allocated, Nebu says so
+   on standard error and saves nothing.
+3. Pixels are read from RAM as little-endian 32-bit words, as QEMU's `bcm2835_fb`
+   reads them: with pixel order RGB, red is the word's bits 7:0 and blue bits 23:16;
+   with BGR, the other way round. NeOS draws only greys so far, in which the two are
+   the same, so this has not been checked against a picture from QEMU or the Pi.
 
 ## Consequences
 

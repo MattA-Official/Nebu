@@ -133,6 +133,8 @@ fn main() -> ExitCode {
                 return ExitCode::from(code as u8);
             }
             Ok(Step::Asleep) => {
+                // Nothing will change the screen now, so it is saved before waiting.
+                save_screen(&bus, screen.as_deref());
                 // Nothing in Nebu can send an event, and no interrupt is due or can be
                 // raised by input, so the core sleeps forever, as it would in QEMU.
                 eprintln!("nebu: core 0 is waiting for something that nothing can send");

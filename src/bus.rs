@@ -371,11 +371,12 @@ impl Bus {
             for x in 0..u64::from(framebuffer.width) {
                 let pixel = self.read_ram(line + 4 * x, 4) as u32;
                 let [low, middle, high, _] = pixel.to_le_bytes();
-                // With red, green, blue order, red is the high byte of the word.
+                // As QEMU reads them: red in the low byte in RGB order (1), and blue
+                // there in BGR order (0).
                 let rgb = if framebuffer.pixel_order == 1 {
-                    [high, middle, low]
-                } else {
                     [low, middle, high]
+                } else {
+                    [high, middle, low]
                 };
                 pixels.extend_from_slice(&rgb);
             }
