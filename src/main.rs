@@ -33,17 +33,23 @@ const LOAD_ADDRESS: u64 = 0x80000;
 const FAULT_EXIT_CODE: u8 = 70;
 
 const USAGE: &str = "\
-usage: nebu [--semihosting] [--trace] [--sd <card.img>] <kernel8.img>
+usage: nebu [--semihosting] [--trace] [--sd <card.img>] [--load <file>@<address>]...
+            <kernel8.img>
 
   --semihosting  let `hlt #0xf000` make semihosting calls, as QEMU's -semihosting does
   --trace        print every instruction to standard error before running it
   --sd <file>    put an SD card holding <file> in the slot; it must be a whole
-                 number of 512 KiB, from 2 GiB to 32 GiB, and is only ever read";
+                 number of 512 KiB, from 2 GiB to 32 GiB, and is only ever read
+  --load <file>@<address>
+                 copy <file> into memory at <address> (hexadecimal, with 0x)
+                 before starting, as the firmware does with config.txt's
+                 initramfs, and QEMU with -device loader";
 
 fn main() -> ExitCode {
     let mut semihosting = false;
     let mut trace = false;
     let mut card = None;
+    let mut loads = Vec::new();
     let mut image = None;
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -52,6 +58,13 @@ fn main() -> ExitCode {
             "--trace" => trace = true,
             "--sd" if card.is_none() => match arguments.next() {
                 Some(path) => card = Some(path),
+                None => {
+                    eprintln!("{USAGE}");
+                    return ExitCode::from(2);
+                }
+            },
+            "--load" => match arguments.next().as_deref().and_then(parse_load) {
+                Some(load) => loads.push(load),
                 None => {
                     eprintln!("{USAGE}");
                     return ExitCode::from(2);
@@ -90,6 +103,15 @@ fn main() -> ExitCode {
         eprintln!("nebu: cannot load {image}: {error}");
         return ExitCode::from(2);
     }
+    for (path, address) in loads {
+        let loaded = fs::read(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| bus.load(address, &bytes).map_err(|error| error.to_string()));
+        if let Err(error) = loaded {
+            eprintln!("nebu: cannot load {path} at {address:#x}: {error}");
+            return ExitCode::from(2);
+        }
+    }
     let mut cpu = Cpu::new(LOAD_ADDRESS, semihosting);
 
     loop {
@@ -112,6 +134,13 @@ fn main() -> ExitCode {
             }
         }
     }
+}
+
+/// Splits a `--load` argument, `<file>@<address>`, into the file and the address.
+fn parse_load(argument: &str) -> Option<(String, u64)> {
+    let (path, address) = argument.rsplit_once('@')?;
+    let address = u64::from_str_radix(address.strip_prefix("0x")?, 16).ok()?;
+    (!path.is_empty()).then(|| (path.to_string(), address))
 }
 
 /// Opens the SD card image at `path`, for reading only.
@@ -161,4 +190,23 @@ fn dump_registers(cpu: &Cpu) {
         flag(f.c, 'C'),
         flag(f.v, 'V')
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_load;
+
+    #[test]
+    fn load_arguments_split_at_the_last_at_sign() {
+        assert_eq!(parse_load("neos.img@0x3000000"), Some(("neos.img".into(), 0x300_0000)));
+        assert_eq!(parse_load("a@b.img@0x10"), Some(("a@b.img".into(), 0x10)));
+    }
+
+    #[test]
+    fn load_arguments_need_a_file_and_a_hexadecimal_address() {
+        assert_eq!(parse_load("neos.img"), None);
+        assert_eq!(parse_load("neos.img@3000000"), None);
+        assert_eq!(parse_load("@0x3000000"), None);
+        assert_eq!(parse_load("neos.img@0xzz"), None);
+    }
 }
