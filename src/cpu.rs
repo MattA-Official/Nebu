@@ -136,6 +136,7 @@ struct SystemRegisters {
     cpacr_el1: u64,
     cntkctl_el1: u64,
     tpidr_el0: u64,
+    tpidr_el1: u64,
     cntv_ctl_el0: u64,
     cntv_cval_el0: u64,
 }
@@ -355,7 +356,7 @@ impl Cpu {
             // set (ADR 0019).
             CntfrqEl0 | CntvctEl0 if self.sys.cntkctl_el1 & CNTKCTL_EL0VCTEN != 0 => 0,
             MpidrEl1 | CurrentEl | SctlrEl1 | SpsrEl1 | ElrEl1 | SpEl0 | EsrEl1 | FarEl1
-            | VbarEl1 | TcrEl1 | MairEl1 | Ttbr0El1 | Ttbr1El1 | CpacrEl1 => 1,
+            | VbarEl1 | TcrEl1 | MairEl1 | Ttbr0El1 | Ttbr1El1 | CpacrEl1 | TpidrEl1 => 1,
             // EL0 can read it only when SCTLR_EL1.UCT is set, which Nebu does not allow.
             CtrEl0 => 1,
             TpidrEl0 => 0,
@@ -396,6 +397,7 @@ impl Cpu {
             CpacrEl1 => self.sys.cpacr_el1,
             CtrEl0 => CTR_EL0,
             TpidrEl0 => self.sys.tpidr_el0,
+            TpidrEl1 => self.sys.tpidr_el1,
             CntfrqEl0 => COUNTER_FREQUENCY,
             CntvctEl0 => self.virtual_count(),
             CntvCtlEl0 => {
@@ -435,6 +437,7 @@ impl Cpu {
             ElrEl1 => self.sys.elr_el1 = value,
             SpEl0 => self.sp_el[0] = value,
             TpidrEl0 => self.sys.tpidr_el0 = value,
+            TpidrEl1 => self.sys.tpidr_el1 = value,
             // The low 11 bits are RES0: the table is 2 KiB-aligned.
             VbarEl1 => self.sys.vbar_el1 = value & !0x7FF,
             HcrEl2 => {
@@ -857,6 +860,11 @@ impl Cpu {
                 let value = self.read_sp(rn, width).wrapping_add(operand2) & width.mask();
                 self.write_sp(rd, width, value);
             }
+            SubExtendedRegister { width, rd, rn, rm, option, amount } => {
+                let operand2 = self.extended(rm, option, amount, width);
+                let value = self.read_sp(rn, width).wrapping_sub(operand2) & width.mask();
+                self.write_sp(rd, width, value);
+            }
             SubsExtendedRegister { width, rd, rn, rm, option, amount } => {
                 let operand2 = self.extended(rm, option, amount, width);
                 let (value, flags) =
@@ -1038,6 +1046,12 @@ impl Cpu {
                 let address = self.base(rn)?.wrapping_add(offset);
                 let value = self.load(bus, address, width.bytes())?;
                 self.write(rt, width, value);
+            }
+            LdrhRegister { rt, rn, rm, extend, amount } => {
+                let offset = self.extend_register(rm, extend) << amount;
+                let address = self.base(rn)?.wrapping_add(offset);
+                let value = self.load(bus, address, 2)?;
+                self.write(rt, Width::W32, value);
             }
             LdrswRegister { rt, rn, rm, extend, amount } => {
                 let offset = self.extend_register(rm, extend) << amount;
@@ -1402,6 +1416,21 @@ mod tests {
     }
 
     #[test]
+    fn ldrh_register_zero_extends_and_scales() {
+        // ldrh w8, [x9, x8] and ldrh w8, [x9, x8, lsl #1], with x8 = 2.
+        for (instruction, address) in [(0x78686928u32, 0x90002), (0x78687928, 0x90004)] {
+            let mut bus = Bus::new(uart());
+            bus.load(0x80000, &instruction.to_le_bytes()).unwrap();
+            bus.load(0x90000, &[0x11, 0x11, 0x22, 0x22, 0x33, 0x33]).unwrap();
+            let mut cpu = Cpu::new(0x80000, false);
+            (cpu.x[8], cpu.x[9]) = (2, 0x90000);
+            cpu.step(&mut bus, false).unwrap();
+            let byte = u64::from([0x11u8, 0x22, 0x33][(address - 0x90000) / 2]);
+            assert_eq!(cpu.x[8], byte << 8 | byte);
+        }
+    }
+
+    #[test]
     fn ldrsb_sign_extends_the_byte_it_loads() {
         // ldrsb w13, [x0, x9] and ldrsb x13, [x0, x9].
         for (instruction, expected) in [(0x38e9680du32, 0xFFFF_FF80), (0x38a9680d, u64::MAX - 0x7F)]
@@ -1504,6 +1533,43 @@ mod tests {
         cpu.step(&mut bus, false).unwrap();
         assert_eq!(cpu.read(9, Width::W64), 0x1234);
         assert_eq!(cpu.el, 0);
+    }
+
+    #[test]
+    fn sub_extended_register_reads_sp() {
+        let mut bus = Bus::new(uart());
+        bus.load(0x80000, &0xcb2063e0u32.to_le_bytes()).unwrap(); // sub x0, sp, x0
+        let mut cpu = Cpu::new(0x80000, false);
+        cpu.el = 1;
+        cpu.spsel = true;
+        cpu.sp_el[1] = 0x9000;
+        cpu.write(0, Width::W64, 0x9010);
+        let flags = cpu.flags;
+        cpu.step(&mut bus, false).unwrap();
+        // 0x9000 - 0x9010 wraps, and the flags stay as they were.
+        assert_eq!(cpu.read(0, Width::W64), 0xffff_ffff_ffff_fff0);
+        assert_eq!(cpu.flags, flags);
+    }
+
+    #[test]
+    fn tpidr_el1_holds_a_value_for_el1_only() {
+        let mut bus = Bus::new(uart());
+        bus.load(0x80000, &0xd518d080u32.to_le_bytes()).unwrap(); // msr tpidr_el1, x0
+        bus.load(0x80004, &0xd538d081u32.to_le_bytes()).unwrap(); // mrs x1, tpidr_el1
+        let mut cpu = Cpu::new(0x80000, false);
+        cpu.el = 1;
+        cpu.write(0, Width::W64, 0x5678);
+        cpu.step(&mut bus, false).unwrap();
+        cpu.step(&mut bus, false).unwrap();
+        assert_eq!(cpu.read(1, Width::W64), 0x5678);
+        cpu.pc = 0x80004;
+        cpu.el = 0;
+        cpu.spsel = false;
+        let register = SystemRegister::TpidrEl1;
+        assert_eq!(
+            cpu.step(&mut bus, false),
+            Err(Fault::SystemRegisterAccess { register, el: 0, write: false })
+        );
     }
 
     #[test]

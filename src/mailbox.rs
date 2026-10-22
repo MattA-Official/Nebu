@@ -15,6 +15,8 @@ const READ: u64 = 0x00;
 const STATUS: u64 = 0x18;
 /// Mailbox 1's WRITE register: sends a message to the firmware.
 const WRITE: u64 = 0x20;
+/// Mailbox 1's STATUS register, whose FULL bit says WRITE cannot take more yet.
+const WRITE_STATUS: u64 = 0x38;
 /// STATUS bit: there is nothing to read.
 const EMPTY: u32 = 1 << 30;
 
@@ -48,6 +50,8 @@ impl Mailbox {
             READ => Some(self.answers.pop_front().ok_or("reading an empty mailbox")?),
             // Nebu answers at once, so the mailbox is never full.
             STATUS => Some(if self.answers.is_empty() { EMPTY } else { 0 }),
+            // Nebu answers each message as it is written, so mailbox 1 never fills.
+            WRITE_STATUS => Some(0),
             _ => None,
         })
     }
@@ -120,6 +124,7 @@ mod tests {
     fn queues_the_answer() {
         let mut mailbox = Mailbox::default();
         assert_eq!(mailbox.read(STATUS), Ok(Some(EMPTY)));
+        assert_eq!(mailbox.read(WRITE_STATUS), Ok(Some(0)));
         assert!(mailbox.read(READ).is_err());
         let Ok(Some(Request::Property { address })) = mailbox.write(WRITE, 0xC000_1008) else {
             panic!("expected a property request");
