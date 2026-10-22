@@ -24,7 +24,7 @@ works live here.
 | 0008 | [Exception levels and exceptions](0008-exception-levels-and-exceptions.md) | Accepted; amended by 0009, 0010 and 0016 |
 | 0009 | [The MMU](0009-the-mmu.md) | Accepted |
 | 0010 | [EL0 and system calls](0010-el0-and-system-calls.md) | Accepted |
-| 0011 | [The firmware mailbox](0011-the-firmware-mailbox.md) | Accepted |
+| 0011 | [The firmware mailbox](0011-the-firmware-mailbox.md) | Accepted; amended by 0023 |
 | 0012 | [Instructions for capabilities](0012-instructions-for-capabilities.md) | Accepted |
 | 0013 | [SBC](0013-sbc.md) | Accepted |
 | 0014 | [Threads and address spaces](0014-threads-and-address-spaces.md) | Accepted |
@@ -36,3 +36,4 @@ works live here.
 | 0020 | [LDRSB (immediate)](0020-ldrsb-immediate.md) | Accepted |
 | 0021 | [Widening multiplies](0021-widening-multiplies.md) | Accepted |
 | 0022 | [Loading a second file into memory](0022-loading-a-second-file.md) | Accepted |
+| 0023 | [The framebuffer](0023-the-framebuffer.md) | Proposed |

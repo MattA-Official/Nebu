@@ -8,7 +8,7 @@ use std::fmt;
 use crate::emmc::Emmc;
 use crate::gpio::Gpio;
 use crate::local::{self, Controller, Local};
-use crate::mailbox::{self, Mailbox, Request};
+use crate::mailbox::{Mailbox, Request};
 use crate::pl011::Pl011;
 use crate::system_timer::SystemTimer;
 
@@ -350,13 +350,37 @@ impl Bus {
             .step_by(4)
             .map(|word| self.read_ram(word, 4) as u32)
             .collect();
-        mailbox::answer(&mut message).map_err(BusError::Mailbox)?;
+        self.mailbox.answer(&mut message).map_err(BusError::Mailbox)?;
         for (word, value) in (address..).step_by(4).zip(message) {
             for index in 0..4 {
                 self.ram.write_byte(word + index, (value >> (8 * index)) as u8);
             }
         }
         Ok(())
+    }
+
+    /// The screen as the framebuffer shows it, if one was allocated: its width, its
+    /// height, and its pixels' red, green and blue bytes, a line at a time from the
+    /// top (ADR 0023).
+    pub fn screen(&self) -> Option<(u32, u32, Vec<u8>)> {
+        let framebuffer = self.mailbox.framebuffer()?;
+        let (address, _) = framebuffer.buffer();
+        let mut pixels = Vec::with_capacity((framebuffer.width * framebuffer.height * 3) as usize);
+        for y in 0..u64::from(framebuffer.height) {
+            let line = address + y * u64::from(framebuffer.pitch());
+            for x in 0..u64::from(framebuffer.width) {
+                let pixel = self.read_ram(line + 4 * x, 4) as u32;
+                let [low, middle, high, _] = pixel.to_le_bytes();
+                // With red, green, blue order, red is the high byte of the word.
+                let rgb = if framebuffer.pixel_order == 1 {
+                    [high, middle, low]
+                } else {
+                    [low, middle, high]
+                };
+                pixels.extend_from_slice(&rgb);
+            }
+        }
+        Some((framebuffer.width, framebuffer.height, pixels))
     }
 
     fn read_ram(&self, address: u64, size: u64) -> u64 {
