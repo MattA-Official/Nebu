@@ -1025,6 +1025,12 @@ impl Cpu {
                 let value = self.load(bus, address, width.bytes())?;
                 self.write(rt, width, value);
             }
+            LdrhRegister { rt, rn, rm, extend, amount } => {
+                let offset = self.extend_register(rm, extend) << amount;
+                let address = self.base(rn)?.wrapping_add(offset);
+                let value = self.load(bus, address, 2)?;
+                self.write(rt, Width::W32, value);
+            }
             LdrswRegister { rt, rn, rm, extend, amount } => {
                 let offset = self.extend_register(rm, extend) << amount;
                 let address = self.base(rn)?.wrapping_add(offset);
