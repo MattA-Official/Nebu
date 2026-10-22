@@ -780,6 +780,20 @@ impl Cpu {
                 let product = self.read(rn, width).wrapping_mul(self.read(rm, width));
                 self.write(rd, width, self.read(ra, width).wrapping_sub(product));
             }
+            MulLong { rd, rn, rm, ra, signed, subtract } => {
+                let extend = |value: u64| match signed {
+                    true => value as u32 as i32 as i64 as u64,
+                    false => value as u32 as u64,
+                };
+                let product = extend(self.read(rn, Width::W32))
+                    .wrapping_mul(extend(self.read(rm, Width::W32)));
+                let addend = self.read(ra, Width::W64);
+                let result = match subtract {
+                    true => addend.wrapping_sub(product),
+                    false => addend.wrapping_add(product),
+                };
+                self.write(rd, Width::W64, result);
+            }
             Csinc { width, rd, rn, rm, condition } => {
                 let value = if self.condition_holds(condition) {
                     self.read(rn, width)
@@ -1325,6 +1339,19 @@ mod tests {
         let (cpu, _) = run(&[0xd2820001, 0x52803562, 0x39000022, 0xa9401023], 4);
         assert_eq!(cpu.x[3], 0xab);
         assert_eq!(cpu.x[4], 0);
+    }
+
+    #[test]
+    fn widening_multiplies_extend_their_32_bit_operands() {
+        // movn w1, #0; movz x2, #3; movz x3, #10; umaddl x0, w1, w2, x3;
+        // smaddl x4, w1, w2, x3; umsubl x5, w1, w2, x3; smsubl x6, w1, w2, x3
+        let program =
+            [0x12800001, 0xd2800062, 0xd2800143, 0x9ba20c20, 0x9b220c24, 0x9ba28c25, 0x9b228c26];
+        let (cpu, _) = run(&program, 7);
+        assert_eq!(cpu.x[0], 0xFFFF_FFFF * 3 + 10);
+        assert_eq!(cpu.x[4], 7);
+        assert_eq!(cpu.x[5], 10u64.wrapping_sub(0xFFFF_FFFF * 3));
+        assert_eq!(cpu.x[6], 13);
     }
 
     #[test]
