@@ -1381,6 +1381,21 @@ mod tests {
     }
 
     #[test]
+    fn ldrh_register_zero_extends_and_scales() {
+        // ldrh w8, [x9, x8] and ldrh w8, [x9, x8, lsl #1], with x8 = 2.
+        for (instruction, address) in [(0x78686928u32, 0x90002), (0x78687928, 0x90004)] {
+            let mut bus = Bus::new(uart());
+            bus.load(0x80000, &instruction.to_le_bytes()).unwrap();
+            bus.load(0x90000, &[0x11, 0x11, 0x22, 0x22, 0x33, 0x33]).unwrap();
+            let mut cpu = Cpu::new(0x80000, false);
+            (cpu.x[8], cpu.x[9]) = (2, 0x90000);
+            cpu.step(&mut bus, false).unwrap();
+            let byte = u64::from([0x11u8, 0x22, 0x33][(address - 0x90000) / 2]);
+            assert_eq!(cpu.x[8], byte << 8 | byte);
+        }
+    }
+
+    #[test]
     fn ldrsb_sign_extends_the_byte_it_loads() {
         // ldrsb w13, [x0, x9] and ldrsb x13, [x0, x9].
         for (instruction, expected) in [(0x38e9680du32, 0xFFFF_FF80), (0x38a9680d, u64::MAX - 0x7F)]
