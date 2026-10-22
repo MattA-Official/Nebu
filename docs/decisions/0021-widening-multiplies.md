@@ -1,6 +1,6 @@
 # 0021. Widening multiplies
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-21
 
 ## Context

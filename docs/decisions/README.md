@@ -34,4 +34,4 @@ works live here.
 | 0018 | [The UART's interrupts](0018-the-uarts-interrupts.md) | Accepted; amended by 0019 |
 | 0019 | [The SD card](0019-the-sd-card.md) | Accepted |
 | 0020 | [LDRSB (immediate)](0020-ldrsb-immediate.md) | Accepted |
-| 0021 | [Widening multiplies](0021-widening-multiplies.md) | Proposed |
+| 0021 | [Widening multiplies](0021-widening-multiplies.md) | Accepted |
