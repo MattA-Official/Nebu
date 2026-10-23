@@ -4,7 +4,8 @@
 //!
 //! Nebu models core 0's virtual timer interrupt, the BCM2835 line routed to core 0
 //! as an IRQ, and on that line the system timer's comparators 1 and 3, the PL011
-//! UART's interrupt, 57 (ADR 0018), and the EMMC controller's, 62 (ADR 0019). Every other source must stay off: the local
+//! UART's interrupt, 57 (ADR 0018), the EMMC controller's, 62 (ADR 0019), and the USB
+//! controller's, 9 (ADR 0024). Every other source must stay off: the local
 //! timer, core 0's mailbox interrupts, the FIQ, and every other device interrupt,
 //! which Nebu never raises.
 
@@ -96,9 +97,12 @@ impl Local {
 }
 
 /// The device interrupts Nebu can raise: the system timer's comparators 1 and 3, the
-/// PL011 UART's and the EMMC controller's. Comparators 0 and 2 are the GPU's on the
+/// USB controller's, the PL011 UART's and the EMMC controller's. Comparators 0 and 2 are the GPU's on the
 /// Pi, and NeOS never enables them.
-const MODELLED: u64 = 0b1010 | UART | EMMC;
+const MODELLED: u64 = 0b1010 | USB | UART | EMMC;
+
+/// The DWC2 USB controller's interrupt (ADR 0024).
+pub const USB: u64 = 1 << 9;
 
 /// The PL011 UART's interrupt (ADR 0018).
 pub const UART: u64 = 1 << 57;

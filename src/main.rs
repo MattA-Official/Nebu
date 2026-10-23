@@ -15,6 +15,8 @@ mod mailbox;
 mod mmu;
 mod pl011;
 mod system_timer;
+mod usb;
+mod usb_devices;
 
 use std::io::Read;
 use std::process::ExitCode;
@@ -25,6 +27,7 @@ use bus::Bus;
 use cpu::{Cpu, Step};
 use emmc::{Card, Emmc};
 use pl011::Pl011;
+use usb::Dwc2;
 
 /// Where the firmware loads `kernel8.img` and starts running it.
 const LOAD_ADDRESS: u64 = 0x80000;
@@ -34,7 +37,7 @@ const FAULT_EXIT_CODE: u8 = 70;
 
 const USAGE: &str = "\
 usage: nebu [--semihosting] [--trace] [--sd <card.img>] [--load <file>@<address>]...
-            [--screen <file.ppm>] <kernel8.img>
+            [--screen <file.ppm>] [--keyboard] <kernel8.img>
 
   --semihosting  let `hlt #0xf000` make semihosting calls, as QEMU's -semihosting does
   --trace        print every instruction to standard error before running it
@@ -46,7 +49,9 @@ usage: nebu [--semihosting] [--trace] [--sd <card.img>] [--load <file>@<address>
                  initramfs, and QEMU with -device loader
   --screen <file.ppm>
                  when the machine stops, save what the screen shows to <file.ppm>,
-                 as QEMU's screendump does";
+                 as QEMU's screendump does
+  --keyboard     plug a USB keyboard into the USB port, behind a hub, as QEMU's
+                 -device usb-kbd does";
 
 fn main() -> ExitCode {
     let mut semihosting = false;
@@ -54,12 +59,14 @@ fn main() -> ExitCode {
     let mut card = None;
     let mut loads = Vec::new();
     let mut screen = None;
+    let mut keyboard = false;
     let mut image = None;
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--semihosting" => semihosting = true,
             "--trace" => trace = true,
+            "--keyboard" => keyboard = true,
             "--sd" if card.is_none() => match arguments.next() {
                 Some(path) => card = Some(path),
                 None => {
@@ -109,7 +116,7 @@ fn main() -> ExitCode {
         }
     };
     let uart = Pl011::new(Box::new(std::io::stdout()), read_stdin());
-    let mut bus = Bus::with_emmc(uart, Emmc::new(card));
+    let mut bus = Bus::with_devices(uart, Emmc::new(card), Dwc2::new(keyboard));
     if let Err(error) = bus.load(LOAD_ADDRESS, &bytes) {
         eprintln!("nebu: cannot load {image}: {error}");
         return ExitCode::from(2);
