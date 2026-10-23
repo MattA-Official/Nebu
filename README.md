@@ -28,7 +28,7 @@ the kernel's threads at EL0 with their system calls,
 preempts them with the virtual timer's interrupt, wakes its drivers with the
 system timer's, the UART's, the SD card controller's and the USB controller's,
 reads blocks from an SD card image, runs USB transfers to a hub and keyboard, and takes the exceptions and aborts the kernel's tests raise. Its output matches QEMU's byte for byte, including
-the panic path and the kernel's fault reports. It currently implements 94 A64
+the panic path and the kernel's fault reports. It currently implements 95 A64
 instructions, 27 system registers, six kinds of exception and seven devices; see
 [`docs/implemented.md`](docs/implemented.md).
 
@@ -50,6 +50,7 @@ cargo build --release
 | `--load <file>@<address>` | Copies `<file>` into memory at `<address>` (hexadecimal, with `0x`) before starting, as the firmware does with `config.txt`'s `initramfs` and QEMU with `-device loader`. It may be repeated ([ADR 0022](docs/decisions/0022-loading-a-second-file.md)). |
 | `--screen <file.ppm>` | When the machine stops, saves what the screen shows to `<file.ppm>`, as QEMU's `screendump` does ([ADR 0023](docs/decisions/0023-the-framebuffer.md)). |
 | `--keyboard` | Plugs a USB keyboard into the USB port, behind a hub, as QEMU's `-device usb-kbd` does ([ADR 0024](docs/decisions/0024-the-usb-controller-and-keyboard.md)). |
+| `--keys <list>` | Plugs in the keyboard and types on it, a press (`+name`) or release (`-name`) each time NeOS polls it, with QEMU's names for keys ([ADR 0025](docs/decisions/0025-typing-on-the-keyboard.md)). |
 
 The emulated serial port is Nebu's standard output and standard input, like QEMU's
 `-serial stdio`.
