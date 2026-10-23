@@ -11,9 +11,10 @@ use crate::local::{self, Controller, Local};
 use crate::mailbox::{Mailbox, Request};
 use crate::pl011::Pl011;
 use crate::system_timer::SystemTimer;
+use crate::usb::{self, Dwc2, Memory};
 
 /// RAM occupies the bottom of the address space, up to the peripherals.
-const RAM_END: u64 = 0x3F00_0000;
+pub const RAM_END: u64 = 0x3F00_0000;
 /// The BCM2835 system timer, and the size of its register window.
 const SYSTEM_TIMER_BASE: u64 = 0x3F00_3000;
 const SYSTEM_TIMER_WINDOW: u64 = 0x1C;
@@ -35,6 +36,8 @@ const UART0_BASE: u64 = 0x3F20_1000;
 /// its register window.
 const EMMC_BASE: u64 = 0x3F30_0000;
 const EMMC_WINDOW: u64 = 0x100;
+/// The DWC2 USB controller (ADR 0024).
+const USB_BASE: u64 = 0x3F98_0000;
 /// The size of the other devices' register windows.
 const DEVICE_WINDOW: u64 = 0x1000;
 
@@ -57,6 +60,8 @@ pub enum BusError {
     Mailbox(&'static str),
     /// A use of the SD card or its controller that Nebu does not model.
     Emmc(&'static str),
+    /// A use of the USB controller or its devices that Nebu does not model.
+    Usb(&'static str),
 }
 
 impl fmt::Display for BusError {
@@ -70,6 +75,7 @@ impl fmt::Display for BusError {
             BusError::FetchFromDevice => write!(f, "instruction fetch from a device"),
             BusError::Mailbox(what) => write!(f, "mailbox: not implemented: {what}"),
             BusError::Emmc(what) => write!(f, "EMMC: not implemented: {what}"),
+            BusError::Usb(what) => write!(f, "{what}"),
         }
     }
 }
@@ -80,7 +86,7 @@ struct Ram {
     pages: HashMap<u64, Box<[u8]>>,
 }
 
-impl Ram {
+impl usb::Memory for Ram {
     fn read_byte(&self, address: u64) -> u8 {
         let page = address / PAGE_SIZE;
         let offset = (address % PAGE_SIZE) as usize;
@@ -105,6 +111,7 @@ pub struct Bus {
     controller: Controller,
     system_timer: SystemTimer,
     emmc: Emmc,
+    usb: Dwc2,
     /// The core's counter at which to next look for input to the UART.
     next_input_poll: u64,
 }
@@ -118,12 +125,12 @@ impl Bus {
     /// SD card.
     #[cfg(test)]
     pub fn new(uart: Pl011) -> Self {
-        Bus::with_emmc(uart, Emmc::new(None))
+        Bus::with_devices(uart, Emmc::new(None), Dwc2::new(false))
     }
 
-    /// Creates a bus with the given UART and EMMC controller, with whatever card is
-    /// in the controller.
-    pub fn with_emmc(uart: Pl011, emmc: Emmc) -> Self {
+    /// Creates a bus with the given UART, EMMC controller and USB controller, with
+    /// whatever card and devices they have.
+    pub fn with_devices(uart: Pl011, emmc: Emmc, usb: Dwc2) -> Self {
         Bus {
             ram: Ram::default(),
             gpio: Gpio::default(),
@@ -133,6 +140,7 @@ impl Bus {
             controller: Controller::default(),
             system_timer: SystemTimer::default(),
             emmc,
+            usb,
             next_input_poll: 0,
         }
     }
@@ -202,6 +210,11 @@ impl Bus {
                 self.update_gpu_line();
                 value.map(u64::from).ok_or(BusError::DeviceRegister { device, offset })
             }
+            Some((device @ "USB", offset)) if size == 4 => self
+                .usb
+                .read(offset)
+                .map(u64::from)
+                .ok_or(BusError::DeviceRegister { device, offset }),
             Some((device @ "mailbox", offset)) if size == 4 => self
                 .mailbox
                 .read(offset)
@@ -263,6 +276,14 @@ impl Bus {
                 self.update_gpu_line();
                 Ok(())
             }
+            Some((device @ "USB", offset)) if size == 4 => {
+                self.usb
+                    .write(offset, value as u32, &mut self.ram)
+                    .map_err(BusError::Usb)?
+                    .ok_or(BusError::DeviceRegister { device, offset })?;
+                self.update_gpu_line();
+                Ok(())
+            }
             Some((device @ "mailbox", offset)) if size == 4 => {
                 match self.mailbox.write(offset, value as u32).map_err(BusError::Mailbox)? {
                     Some(Request::Property { address }) => self.answer_property(address),
@@ -285,6 +306,7 @@ impl Bus {
     /// UART (ADR 0018).
     pub fn advance(&mut self, ticks: u64) {
         let mut changed = self.system_timer.advance(ticks);
+        changed |= self.usb.advance(ticks);
         if ticks >= self.next_input_poll {
             self.next_input_poll = ticks.saturating_add(INPUT_INTERVAL);
             changed |= self.uart.poll();
@@ -301,12 +323,13 @@ impl Bus {
         self.local.set_gpu(self.device_levels() & self.controller.enabled() != 0);
     }
 
-    /// The device interrupts raised: the system timer's, the UART's and the EMMC
-    /// controller's.
+    /// The device interrupts raised: the system timer's, the UART's, the EMMC
+    /// controller's and the USB controller's.
     fn device_levels(&self) -> u64 {
         let uart = if self.uart.interrupt() { local::UART } else { 0 };
         let emmc = if self.emmc.interrupt() { local::EMMC } else { 0 };
-        u64::from(self.system_timer.levels()) | uart | emmc
+        let usb = if self.usb.interrupt() { local::USB } else { 0 };
+        u64::from(self.system_timer.levels()) | uart | emmc | usb
     }
 
     /// Waits for input to the UART, if it would raise an enabled interrupt, for a
@@ -336,7 +359,9 @@ impl Bus {
     /// The core's counter at which the next enabled device interrupt is raised, if
     /// one ever will be.
     pub fn next_device_interrupt(&self) -> Option<u64> {
-        self.system_timer.next_match(self.controller.enabled() as u32)
+        let timer = self.system_timer.next_match(self.controller.enabled() as u32);
+        let usb = self.usb.next_interrupt().filter(|_| self.controller.enabled() & local::USB != 0);
+        [timer, usb].into_iter().flatten().min()
     }
 
     /// Answers the property message at `address` in RAM, as the firmware would.
@@ -412,6 +437,9 @@ fn device_at(address: u64) -> Option<(&'static str, u64)> {
     }
     if (EMMC_BASE..EMMC_BASE + EMMC_WINDOW).contains(&address) {
         return Some(("EMMC", address - EMMC_BASE));
+    }
+    if (USB_BASE..USB_BASE + DEVICE_WINDOW).contains(&address) {
+        return Some(("USB", address - USB_BASE));
     }
     if (UART0_BASE..UART0_BASE + DEVICE_WINDOW).contains(&address) {
         return Some(("PL011 UART", address - UART0_BASE));
