@@ -6,7 +6,8 @@
 //! same three stages as QEMU's USB core: a setup packet, data, and status. A request
 //! that changes the device takes effect at the status stage, as SET_ADDRESS must.
 //! Requests NeOS does not send halt Nebu, except a HID class request that HID does
-//! not define, which a keyboard stalls, as QEMU's and real ones do.
+//! not define, which a keyboard stalls, as QEMU's and real ones do. The keyboard
+//! types what `--keys` lists, a press or release each time it is polled (ADR 0025).
 
 use std::collections::VecDeque;
 
@@ -249,8 +250,117 @@ struct Keyboard {
     idle: u8,
     /// The LEDs the host last set.
     lights: u8,
-    /// The reports waiting to be sent.
-    reports: VecDeque<[u8; 8]>,
+    /// The modifier keys held, a bit each, as a report's first byte holds them.
+    modifiers: u8,
+    /// The other keys held, in the order they were pressed.
+    held: Vec<u8>,
+    /// The presses and releases still to come, from `--keys` (ADR 0025). A reset does
+    /// not lose them, as the person typing would carry on.
+    keys: VecDeque<Key>,
+}
+
+/// A key pressed or released, from `--keys`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Key {
+    /// Its usage on the keyboard page.
+    pub usage: u8,
+    /// Whether it is pressed, rather than released.
+    pub pressed: bool,
+}
+
+/// The keys `--keys` knows, by the names QEMU's QMP gives them (its `QKeyCode`s),
+/// with their usages on the keyboard page. Letters and digits are their own names.
+const KEY_NAMES: [(&str, u8); 31] = [
+    ("ret", 0x28),
+    ("esc", 0x29),
+    ("backspace", 0x2A),
+    ("tab", 0x2B),
+    ("spc", 0x2C),
+    ("minus", 0x2D),
+    ("equal", 0x2E),
+    ("bracket_left", 0x2F),
+    ("bracket_right", 0x30),
+    ("backslash", 0x31),
+    ("semicolon", 0x33),
+    ("apostrophe", 0x34),
+    ("grave_accent", 0x35),
+    ("comma", 0x36),
+    ("dot", 0x37),
+    ("slash", 0x38),
+    ("caps_lock", 0x39),
+    ("home", 0x4A),
+    ("delete", 0x4C),
+    ("end", 0x4D),
+    ("right", 0x4F),
+    ("left", 0x50),
+    ("down", 0x51),
+    ("up", 0x52),
+    ("ctrl", 0xE0),
+    ("shift", 0xE1),
+    ("alt", 0xE2),
+    ("ctrl_r", 0xE4),
+    ("shift_r", 0xE5),
+    ("alt_r", 0xE6),
+    ("num_lock", 0x53),
+];
+
+/// The keyboard page's first modifier key, Left Ctrl, and its last, Right GUI.
+const FIRST_MODIFIER: u8 = 0xE0;
+const LAST_MODIFIER: u8 = 0xE7;
+
+/// Parses `--keys`'s list: names separated by commas, each after `+` for a press or
+/// `-` for a release, such as `+shift,+h,-h,-shift`.
+pub fn parse_keys(list: &str) -> Result<Vec<Key>, String> {
+    list.split(',')
+        .map(|item| {
+            let (pressed, name) = match item.split_at_checked(1) {
+                Some(("+", name)) => (true, name),
+                Some(("-", name)) => (false, name),
+                _ => return Err(format!("{item:?} does not start with + or -")),
+            };
+            let usage = match *name.as_bytes() {
+                [letter @ b'a'..=b'z'] => 0x04 + (letter - b'a'),
+                [b'0'] => 0x27,
+                [digit @ b'1'..=b'9'] => 0x1E + (digit - b'1'),
+                _ => match KEY_NAMES.iter().find(|&&(known, _)| known == name) {
+                    Some(&(_, usage)) => usage,
+                    None => return Err(format!("{name:?} is not a key Nebu knows")),
+                },
+            };
+            Ok(Key { usage, pressed })
+        })
+        .collect()
+}
+
+impl Keyboard {
+    /// Takes the next press or release, and returns the report that follows, as
+    /// QEMU's keyboard handles one key a poll: the modifiers, a reserved byte, and
+    /// the first six other keys held, or 1 in each if more are.
+    fn next_report(&mut self) -> Option<[u8; 8]> {
+        let key = self.keys.pop_front()?;
+        if (FIRST_MODIFIER..=LAST_MODIFIER).contains(&key.usage) {
+            let bit = 1 << (key.usage - FIRST_MODIFIER);
+            if key.pressed {
+                self.modifiers |= bit;
+            } else {
+                self.modifiers &= !bit;
+            }
+        } else if key.pressed {
+            if !self.held.contains(&key.usage) {
+                self.held.push(key.usage);
+            }
+        } else {
+            self.held.retain(|&held| held != key.usage);
+        }
+        let mut report = [0; 8];
+        report[0] = self.modifiers;
+        if self.held.len() > 6 {
+            report[2..].fill(1);
+        } else {
+            report[2..2 + self.held.len()].copy_from_slice(&self.held);
+        }
+        Some(report)
+    }
 }
 
 /// A USB device.
@@ -262,10 +372,11 @@ pub struct Device {
 }
 
 impl Device {
-    /// QEMU's hub, with a keyboard on port 1.
-    pub fn hub_with_keyboard() -> Device {
+    /// QEMU's hub, with a keyboard on port 1, on which `keys` will be typed.
+    pub fn hub_with_keyboard(keys: Vec<Key>) -> Device {
+        let keyboard = Keyboard { keys: keys.into(), ..Keyboard::default() };
         let mut ports: [Port; PORTS] = Default::default();
-        ports[0].device = Some(Box::new(Device::new(Kind::Keyboard(Keyboard::default()))));
+        ports[0].device = Some(Box::new(Device::new(Kind::Keyboard(keyboard))));
         let mut hub = Device::new(Kind::Hub { ports });
         hub.reset();
         hub
@@ -296,7 +407,8 @@ impl Device {
                 }
             }
             Kind::Keyboard(keyboard) => {
-                *keyboard = Keyboard { protocol: 1, ..Keyboard::default() };
+                let keys = std::mem::take(&mut keyboard.keys);
+                *keyboard = Keyboard { protocol: 1, keys, ..Keyboard::default() };
             }
         }
     }
@@ -345,7 +457,7 @@ impl Device {
                 }
                 Ok(Reply::sent(changed.to_le_bytes()[..length].to_vec()))
             }
-            Kind::Keyboard(keyboard) => match keyboard.reports.pop_front() {
+            Kind::Keyboard(keyboard) => match keyboard.next_report() {
                 Some(report) => Ok(Reply::sent(report[..room.min(8)].to_vec())),
                 None => Ok(Reply::Nak),
             },
@@ -576,7 +688,7 @@ mod tests {
 
     #[test]
     fn the_hub_takes_its_address_at_the_status_stage() {
-        let mut hub = Device::hub_with_keyboard();
+        let mut hub = Device::hub_with_keyboard(Vec::new());
         let descriptor = read(&mut hub, 0x80, GET_DESCRIPTOR, 0x0100, 0, 18).unwrap();
         assert_eq!(descriptor, HUB_DEVICE);
         let packet = setup(0x00, SET_ADDRESS, 1, 0, 0);
@@ -589,7 +701,7 @@ mod tests {
 
     #[test]
     fn a_reset_port_reaches_the_keyboard() {
-        let mut hub = Device::hub_with_keyboard();
+        let mut hub = Device::hub_with_keyboard(Vec::new());
         hub.address = 1;
         assert!(hub.find(0).is_none());
         let status = read(&mut hub, 0xA3, GET_STATUS, 0, 1, 4).unwrap();
@@ -604,12 +716,50 @@ mod tests {
 
     #[test]
     fn the_hub_reports_changed_ports_once_configured() {
-        let mut hub = Device::hub_with_keyboard();
+        let mut hub = Device::hub_with_keyboard(Vec::new());
         assert!(hub.handle(1, Token::In, &[], 2).is_err());
         write(&mut hub, 0x00, SET_CONFIGURATION, 1, 0);
         assert_eq!(hub.handle(1, Token::In, &[], 2).unwrap(), Reply::sent(vec![0b10, 0]));
         write(&mut hub, 0x23, CLEAR_FEATURE, 16, 1);
         assert_eq!(hub.handle(1, Token::In, &[], 2).unwrap(), Reply::Nak);
+    }
+
+    #[test]
+    fn keys_parse_by_their_qemu_names() {
+        let keys = parse_keys("+shift,+h,-h,-shift,+0,+caps_lock").unwrap();
+        let usages: Vec<(u8, bool)> = keys.iter().map(|key| (key.usage, key.pressed)).collect();
+        assert_eq!(
+            usages,
+            [(0xE1, true), (0x0B, true), (0x0B, false), (0xE1, false), (0x27, true), (0x39, true)]
+        );
+        assert!(parse_keys("shift").is_err());
+        assert!(parse_keys("+hyper").is_err());
+        assert!(parse_keys("").is_err());
+    }
+
+    #[test]
+    fn the_keyboard_reports_one_key_a_poll() {
+        let keys = parse_keys("+shift,+h,+i,-h,-shift,-i").unwrap();
+        let mut hub = Device::hub_with_keyboard(keys);
+        write(&mut hub, 0x00, SET_ADDRESS, 1, 0);
+        write(&mut hub, 0x23, SET_FEATURE, 4, 1);
+        let keyboard = hub.find(0).unwrap();
+        write(keyboard, 0x00, SET_CONFIGURATION, 1, 0);
+        let reports: Vec<Reply> =
+            (0..7).map(|_| keyboard.handle(1, Token::In, &[], 8).unwrap()).collect();
+        let sent = |report: [u8; 8]| Reply::sent(report.to_vec());
+        assert_eq!(
+            reports,
+            [
+                sent([2, 0, 0, 0, 0, 0, 0, 0]),
+                sent([2, 0, 0x0B, 0, 0, 0, 0, 0]),
+                sent([2, 0, 0x0B, 0x0C, 0, 0, 0, 0]),
+                sent([2, 0, 0x0C, 0, 0, 0, 0, 0]),
+                sent([0, 0, 0x0C, 0, 0, 0, 0, 0]),
+                sent([0; 8]),
+                Reply::Nak,
+            ]
+        );
     }
 
     #[test]
