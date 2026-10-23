@@ -89,6 +89,7 @@ all addressing modes.
 | STRB (immediate)             | NeOS step 3: storing the kernel |
 | STRB (register)              | NeOS stage 7: the console's buffers ([ADR 0018](decisions/0018-the-uarts-interrupts.md)) |
 | STRH (immediate)             | NeOS step 2: panic path      |
+| STRH (register)              | NeOS's keyboard stage: the keyboard driver |
 | STUR                         | NeOS step 2: boot            |
 | STURB                        | NeOS stage 3: loading the root task |
 | STURH                        | NeOS stage 5a: ASIDs         |

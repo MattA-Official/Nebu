@@ -437,6 +437,10 @@ pub enum Instruction {
     /// `amount`)` into `rt`, zero-extended. `amount` is 0 or 1. `rn` 31 is SP; `rt`
     /// and `rm` 31 the zero register.
     LdrhRegister { rt: u8, rn: u8, rm: u8, extend: Extend, amount: u8 },
+    /// STRH (register): store the low halfword of `rt` to `rn + (rm extended,
+    /// shifted by `amount`)`. `amount` is 0 or 1. `rn` 31 is SP; `rt` and `rm` 31 the
+    /// zero register.
+    StrhRegister { rt: u8, rn: u8, rm: u8, extend: Extend, amount: u8 },
     /// STR (register): store `rt` to `rn + (rm extended, shifted by `amount`)`.
     /// `amount` is 0 or log2 of the access size. `rn` 31 is SP; `rt` and `rm` 31 the
     /// zero register.
@@ -916,6 +920,10 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
                     (0b01, 0b01) => {
                         let amount = bits(word, 12, 12) as u8;
                         Ok(Instruction::LdrhRegister { rt, rn, rm: reg(word, 16), extend, amount })
+                    }
+                    (0b01, 0b00) => {
+                        let amount = bits(word, 12, 12) as u8;
+                        Ok(Instruction::StrhRegister { rt, rn, rm: reg(word, 16), extend, amount })
                     }
                     (0b10 | 0b11, 0b00 | 0b01) => {
                         let width = Width::from_bit(size & 1);
@@ -1565,6 +1573,16 @@ impl fmt::Display for Instruction {
                     zr(rm, rm_width)
                 )
             }
+            StrhRegister { rt, rn, rm, extend, amount } => {
+                let (name, rm_width) = extend_name(extend);
+                write!(
+                    f,
+                    "strh {}, [{}, {}, {name} #{amount}]",
+                    zr(rt, Width::W32),
+                    sp(rn, Width::W64),
+                    zr(rm, rm_width)
+                )
+            }
             LdrswRegister { rt, rn, rm, extend, amount } => {
                 let (name, rm_width) = extend_name(extend);
                 write!(
@@ -1731,6 +1749,7 @@ mod tests {
             ),
             (0x3868694c, LdrbRegister { rt: 12, rn: 10, rm: 8, extend: Extend::Lsl }),
             (0x78686928, LdrhRegister { rt: 8, rn: 9, rm: 8, extend: Extend::Lsl, amount: 0 }),
+            (0x78297b4b, StrhRegister { rt: 11, rn: 26, rm: 9, extend: Extend::Lsl, amount: 1 }),
             (0x78687928, LdrhRegister { rt: 8, rn: 9, rm: 8, extend: Extend::Lsl, amount: 1 }),
             (0x382b6b0a, StrbRegister { rt: 10, rn: 24, rm: 11, extend: Extend::Lsl }),
             (0x38e9680d, LdrsbRegister { width: W32, rt: 13, rn: 0, rm: 9, extend: Extend::Lsl }),

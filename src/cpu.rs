@@ -1053,6 +1053,11 @@ impl Cpu {
                 let value = self.load(bus, address, 2)?;
                 self.write(rt, Width::W32, value);
             }
+            StrhRegister { rt, rn, rm, extend, amount } => {
+                let offset = self.extend_register(rm, extend) << amount;
+                let address = self.base(rn)?.wrapping_add(offset);
+                self.store(bus, address, 2, self.read(rt, Width::W32))?;
+            }
             LdrswRegister { rt, rn, rm, extend, amount } => {
                 let offset = self.extend_register(rm, extend) << amount;
                 let address = self.base(rn)?.wrapping_add(offset);
@@ -1428,6 +1433,21 @@ mod tests {
             let byte = u64::from([0x11u8, 0x22, 0x33][(address - 0x90000) / 2]);
             assert_eq!(cpu.x[8], byte << 8 | byte);
         }
+    }
+
+    #[test]
+    fn strh_register_stores_the_low_halfword_and_scales() {
+        // strh w11, [x26, x9, lsl #1], with x9 = 2.
+        let mut bus = Bus::new(uart());
+        bus.load(0x80000, &0x78297b4bu32.to_le_bytes()).unwrap();
+        let mut cpu = Cpu::new(0x80000, false);
+        (cpu.x[9], cpu.x[11], cpu.x[26]) = (2, 0xAAAA_BEEF, 0x90000);
+        cpu.step(&mut bus, false).unwrap();
+        let mut stored = [0; 6];
+        for (offset, byte) in stored.iter_mut().enumerate() {
+            *byte = bus.read(0x90000 + offset as u64, 1).unwrap() as u8;
+        }
+        assert_eq!(stored, [0, 0, 0, 0, 0xEF, 0xBE]);
     }
 
     #[test]

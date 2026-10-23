@@ -39,3 +39,4 @@ works live here.
 | 0023 | [The framebuffer](0023-the-framebuffer.md) | Accepted |
 | 0024 | [The USB controller, a hub and a keyboard](0024-the-usb-controller-and-keyboard.md) | Proposed |
 | 0025 | [Typing on the keyboard](0025-typing-on-the-keyboard.md) | Proposed |
+| 0026 | [STRH (register)](0026-strh-register.md) | Proposed |
