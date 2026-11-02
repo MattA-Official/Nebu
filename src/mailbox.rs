@@ -1,5 +1,6 @@
 //! The VideoCore mailbox, as far as NeOS uses it: asking the firmware how much memory
-//! the CPU has (ADR 0011), and for a framebuffer (ADR 0023).
+//! the CPU has (ADR 0011), for a framebuffer (ADR 0023), and to power the USB
+//! controller (ADR 0024).
 //!
 //! The CPU writes the bus address of a message, with a channel number in its low 4
 //! bits, to mailbox 1's WRITE register. The firmware answers in the message itself,
@@ -33,6 +34,8 @@ const SET_VIRTUAL_SIZE: u32 = 0x0004_8004;
 const SET_DEPTH: u32 = 0x0004_8005;
 const SET_PIXEL_ORDER: u32 = 0x0004_8006;
 const SET_VIRTUAL_OFFSET: u32 = 0x0004_8009;
+/// Property tag: turns a device's power on or off.
+const SET_POWER_STATE: u32 = 0x0002_8001;
 /// Where QEMU's `raspi3b` puts the framebuffer: 1 MiB into the GPU's memory.
 const FRAMEBUFFER_ADDRESS: u32 = 0x3C10_0000;
 /// The GPU's memory ends where the peripherals start, so the buffer must fit below.
@@ -207,11 +210,18 @@ fn answer(message: &mut [u32], framebuffer: &mut Framebuffer) -> Result<(), &'st
                 message[value + 1] = bytes as u32;
                 8
             }
+            // Nothing is ever off, so this only answers. As QEMU does, the state
+            // says the device is on if it was asked to be, and the "wait" bit is
+            // cleared.
+            SET_POWER_STATE if size >= 8 => {
+                message[value + 1] &= 1;
+                8
+            }
             GET_PITCH if size >= 4 => {
                 message[value] = framebuffer.pitch();
                 4
             }
-            _ => return Err("property tags other than the memory's and the framebuffer's"),
+            _ => return Err("property tags other than the memory's, the framebuffer's and power"),
         };
         message[index + 2] = RESPONSE_SUCCESS | answered;
         index += 3 + size / 4;
@@ -280,6 +290,13 @@ mod tests {
             let mut message = [32, 0, tag, 8, 0, words[0], words[1], 0];
             assert!(Mailbox::default().answer(&mut message).is_err());
         }
+    }
+
+    #[test]
+    fn answers_power_as_qemu_does() {
+        let mut message = [32, 0, SET_POWER_STATE, 8, 0, 3, 0b11, 0];
+        Mailbox::default().answer(&mut message).unwrap();
+        assert_eq!(&message[4..7], [RESPONSE_SUCCESS | 8, 3, 1]);
     }
 
     #[test]
