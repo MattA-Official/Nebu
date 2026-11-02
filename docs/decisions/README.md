@@ -37,4 +37,4 @@ works live here.
 | 0021 | [Widening multiplies](0021-widening-multiplies.md) | Accepted |
 | 0022 | [Loading a second file into memory](0022-loading-a-second-file.md) | Accepted |
 | 0023 | [The framebuffer](0023-the-framebuffer.md) | Accepted |
-| 0024 | [The USB controller, a hub and a keyboard](0024-the-usb-controller-and-keyboard.md) | Proposed |
+| 0024 | [The USB controller, a hub and a keyboard](0024-the-usb-controller-and-keyboard.md) | Accepted |
