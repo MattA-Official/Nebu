@@ -37,6 +37,10 @@ works live here.
 | 0021 | [Widening multiplies](0021-widening-multiplies.md) | Accepted |
 | 0022 | [Loading a second file into memory](0022-loading-a-second-file.md) | Accepted |
 | 0023 | [The framebuffer](0023-the-framebuffer.md) | Accepted |
+<<<<<<< HEAD
 | 0024 | [The USB controller, a hub and a keyboard](0024-the-usb-controller-and-keyboard.md) | Proposed |
-| 0025 | [Typing on the keyboard](0025-typing-on-the-keyboard.md) | Proposed |
-| 0026 | [STRH (register)](0026-strh-register.md) | Proposed |
+| 0025 | [Typing on the keyboard](0025-typing-on-the-keyboard.md) | Accepted |
+| 0026 | [STRH (register)](0026-strh-register.md) | Accepted |
+=======
+| 0024 | [The USB controller, a hub and a keyboard](0024-the-usb-controller-and-keyboard.md) | Accepted |
+>>>>>>> origin/stage-usb

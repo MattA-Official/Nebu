@@ -1,6 +1,6 @@
 # 0026. STRH (register)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-23
 
 ## Context

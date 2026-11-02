@@ -1,6 +1,6 @@
 # 0025. Typing on the keyboard
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-23
 - **Amends:** [0024](0024-the-usb-controller-and-keyboard.md), decision 9 (the
   keyboard's report endpoint)
