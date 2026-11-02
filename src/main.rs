@@ -37,7 +37,7 @@ const FAULT_EXIT_CODE: u8 = 70;
 
 const USAGE: &str = "\
 usage: nebu [--semihosting] [--trace] [--sd <card.img>] [--load <file>@<address>]...
-            [--screen <file.ppm>] [--keyboard] <kernel8.img>
+            [--screen <file.ppm>] [--keyboard] [--keys <list>] <kernel8.img>
 
   --semihosting  let `hlt #0xf000` make semihosting calls, as QEMU's -semihosting does
   --trace        print every instruction to standard error before running it
@@ -51,7 +51,11 @@ usage: nebu [--semihosting] [--trace] [--sd <card.img>] [--load <file>@<address>
                  when the machine stops, save what the screen shows to <file.ppm>,
                  as QEMU's screendump does
   --keyboard     plug a USB keyboard into the USB port, behind a hub, as QEMU's
-                 -device usb-kbd does";
+                 -device usb-kbd does
+  --keys <list>  plug in the keyboard, and type on it: each time NeOS asks it for a
+                 report, the next of these presses (+name) and releases (-name),
+                 separated by commas, with QEMU's names for keys, such as
+                 +shift,+h,-h,-shift";
 
 fn main() -> ExitCode {
     let mut semihosting = false;
@@ -59,14 +63,27 @@ fn main() -> ExitCode {
     let mut card = None;
     let mut loads = Vec::new();
     let mut screen = None;
-    let mut keyboard = false;
+    let mut keyboard = None;
     let mut image = None;
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--semihosting" => semihosting = true,
             "--trace" => trace = true,
-            "--keyboard" => keyboard = true,
+            "--keyboard" => {
+                keyboard.get_or_insert_with(Vec::new);
+            }
+            "--keys" => match arguments.next().as_deref().map(usb_devices::parse_keys) {
+                Some(Ok(keys)) => keyboard.get_or_insert_with(Vec::new).extend(keys),
+                Some(Err(error)) => {
+                    eprintln!("nebu: --keys: {error}");
+                    return ExitCode::from(2);
+                }
+                None => {
+                    eprintln!("{USAGE}");
+                    return ExitCode::from(2);
+                }
+            },
             "--sd" if card.is_none() => match arguments.next() {
                 Some(path) => card = Some(path),
                 None => {

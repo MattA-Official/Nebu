@@ -125,7 +125,7 @@ impl Bus {
     /// SD card.
     #[cfg(test)]
     pub fn new(uart: Pl011) -> Self {
-        Bus::with_devices(uart, Emmc::new(None), Dwc2::new(false))
+        Bus::with_devices(uart, Emmc::new(None), Dwc2::new(None))
     }
 
     /// Creates a bus with the given UART, EMMC controller and USB controller, with
