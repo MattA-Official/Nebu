@@ -41,4 +41,3 @@ works live here.
 | 0025 | [Typing on the keyboard](0025-typing-on-the-keyboard.md) | Accepted |
 | 0026 | [STRH (register)](0026-strh-register.md) | Accepted |
 | 0030 | [The hardware random number generator](0030-the-random-number-generator.md) | Proposed |
-| 0031 | [CSNEG](0031-csneg.md) | Proposed |
