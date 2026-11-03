@@ -209,6 +209,9 @@ impl Card {
                 Response::Short(status)
             }
             (false, 24 | 25, State::Transfer) => return Err("a write past the end of the card"),
+            // CMD13: the card's status, which NeOS asks for until a write has been
+            // programmed. Nebu's card programs at once.
+            (false, 13, State::Transfer) if argument >> 16 == RCA => Response::Short(self.status()),
             (false, 12, State::Receiving) => {
                 let status = self.status();
                 self.state = State::Transfer;
@@ -605,6 +608,8 @@ mod tests {
             assert_eq!(first_word(&mut emmc, block), block);
         }
         assert_eq!(first_word(&mut emmc, 13), 0);
+        // CMD13 finds the card ready for data, in the transfer state.
+        assert_eq!(command(&mut emmc, 13 << 24 | 2 << 16, RCA << 16) & 0x1F00, 4 << 9 | 1 << 8);
         // A write past the end of the card halts.
         emmc.write(BLKSIZECNT, 1 << 16 | 512, true).unwrap();
         emmc.write(ARG1, 8 << 20, true).unwrap();

@@ -49,7 +49,9 @@ For what the controller models:
 3. During a write, STATUS shows DAT_INHIBIT and WRITE_AVAILABLE (bit 10), and
    INTERRUPT bit 4 (WRITE_RDY) is raised for each block. The last block raises
    DATA_DONE; the card is never busy afterwards.
-4. CMDTM's multi-block and block-count-enable bits are accepted, only together, and
+4. CMD13, the card's status, is answered in the transfer state. NeOS asks for it
+   after each write until the card is ready for data; Nebu's card always is.
+5. CMDTM's multi-block and block-count-enable bits are accepted, only together, and
    only for a write. A command sent before a write's blocks are all written halts
    Nebu, as does writing DATA with no write under way. Resetting the data line
    abandons a write.
