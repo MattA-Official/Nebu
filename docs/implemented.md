@@ -40,6 +40,7 @@ all addressing modes.
 | CSEL                         | NeOS stage 1: fault reports  |
 | CSINC                        | NeOS stage 2: MMU            |
 | CSINV                        | NeOS stage 4: capability test |
+| CSNEG                        | NeOS: writing files ([ADR 0028](decisions/0028-csneg.md)) |
 | DC CIVAC                     | NeOS stage 4: asking the firmware about memory |
 | DSB                          | NeOS step 3: starting the kernel |
 | EOR (immediate)              | NeOS stage 2: MMU            |
@@ -121,7 +122,7 @@ and `lsr` with a register shift amount are LSLV and LSRV, `cset` and `cinc` are
 CSINC, `mvn` is ORN, `neg` is SUB (shifted register), `mul` is MADD, `smull`,
 `umull`, `smnegl` and `umnegl` are SMADDL, UMADDL, SMSUBL and UMSUBL, `cmn` with a
 register is ADDS (shifted register), `ngc` and `ngcs` are SBC and SBCS, `ror` with an immediate is EXTR,
-`csetm` is CSINV, and `cmp` with an extended register is SUBS (extended register).
+`csetm` is CSINV, `cneg` is CSNEG, and `cmp` with an extended register is SUBS (extended register).
 LDURB and STURB run as LDRB and STRB with an unscaled offset
 ([ADR 0010](decisions/0010-el0-and-system-calls.md)), LDUR as LDR
 ([ADR 0012](decisions/0012-instructions-for-capabilities.md)), and LDURH and STURH
