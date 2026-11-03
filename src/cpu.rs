@@ -813,6 +813,14 @@ impl Cpu {
                 };
                 self.write(rd, width, value);
             }
+            Csneg { width, rd, rn, rm, condition } => {
+                let value = if self.condition_holds(condition) {
+                    self.read(rn, width)
+                } else {
+                    self.read(rm, width).wrapping_neg() & width.mask()
+                };
+                self.write(rd, width, value);
+            }
             CcmpRegister { width, rn, rm, nzcv, condition } => {
                 let operand2 = self.read(rm, width);
                 self.conditional_compare(width, rn, operand2, nzcv, condition);

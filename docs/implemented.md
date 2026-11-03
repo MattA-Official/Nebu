@@ -40,6 +40,7 @@ all addressing modes.
 | CSEL                         | NeOS stage 1: fault reports  |
 | CSINC                        | NeOS stage 2: MMU            |
 | CSINV                        | NeOS stage 4: capability test |
+| CSNEG                        | The random service: `abs_diff` ([ADR 0031](decisions/0031-csneg.md)) |
 | DC CIVAC                     | NeOS stage 4: asking the firmware about memory |
 | DSB                          | NeOS step 3: starting the kernel |
 | EOR (immediate)              | NeOS stage 2: MMU            |
