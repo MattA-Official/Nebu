@@ -4,11 +4,11 @@
 //! The controller follows the SD Host Controller Specification. Nebu runs each
 //! command the moment it is written, as QEMU 8.2 does, so a command, and a block's
 //! data, are ready before the next instruction. The card is a high-capacity card
-//! read from an image file, and is only ever read. Every command, register or state
-//! NeOS does not use halts Nebu.
+//! held in an image file, which it reads and writes (ADR 0027). Every command,
+//! register or state NeOS does not use halts Nebu.
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 
 /// The registers NeOS uses, as offsets from the controller's base at 0x3F30_0000.
 const BLKSIZECNT: u64 = 0x04;
@@ -23,9 +23,10 @@ const INTERRUPT: u64 = 0x30;
 const IRPT_MASK: u64 = 0x34;
 const IRPT_EN: u64 = 0x38;
 
-/// STATUS: the data lines are in use; a block is ready to read; a card is in the
-/// slot.
+/// STATUS: the data lines are in use; there is room for a block to write; a block is
+/// ready to read; a card is in the slot.
 const DAT_INHIBIT: u32 = 1 << 1;
+const WRITE_AVAILABLE: u32 = 1 << 10;
 const READ_AVAILABLE: u32 = 1 << 11;
 const CARD_INSERTED: u32 = 1 << 16;
 
@@ -38,10 +39,12 @@ const SRST_HC: u32 = 1 << 24;
 const SRST_CMD: u32 = 1 << 25;
 const SRST_DATA: u32 = 1 << 26;
 
-/// INTERRUPT: a command finished, a transfer finished (or a busy card let go), a
-/// block is ready to read, there is an error, and the command timed out.
+/// INTERRUPT: a command finished, a transfer finished (or a busy card let go), there
+/// is room for a block to write, a block is ready to read, there is an error, and
+/// the command timed out.
 const CMD_DONE: u32 = 1 << 0;
 const DATA_DONE: u32 = 1 << 1;
+const WRITE_RDY: u32 = 1 << 4;
 const READ_RDY: u32 = 1 << 5;
 const ERROR: u32 = 1 << 15;
 const CMD_TIMEOUT: u32 = 1 << 16;
@@ -50,9 +53,13 @@ const CMD_TIMEOUT: u32 = 1 << 16;
 const RESPONSE_BUSY: u32 = 3;
 const DATA_PRESENT: u32 = 1 << 21;
 const READ_FROM_CARD: u32 = 1 << 4;
-/// CMDTM's bits Nebu does not model: the command type (suspend, resume, abort), a
-/// multi-block transfer, Auto CMD12 or CMD23, and the block count.
-const UNMODELLED_COMMAND_BITS: u32 = 0b11 << 22 | 1 << 5 | 0b11 << 2 | 1 << 1;
+/// CMDTM: a transfer of several blocks, and counting them down in BLKSIZECNT, which
+/// NeOS uses together and only to write.
+const MULTI_BLOCK: u32 = 1 << 5;
+const BLOCK_COUNT_ENABLE: u32 = 1 << 1;
+/// CMDTM's bits Nebu does not model: the command type (suspend, resume, abort), and
+/// Auto CMD12 or CMD23.
+const UNMODELLED_COMMAND_BITS: u32 = 0b11 << 22 | 0b11 << 2;
 
 /// The only block size NeOS uses, and that a high-capacity card has.
 pub const BLOCK: u64 = 512;
@@ -78,6 +85,8 @@ enum State {
     Identification,
     Standby,
     Transfer,
+    /// Taking the blocks of a write.
+    Receiving,
 }
 
 impl State {
@@ -89,6 +98,7 @@ impl State {
             State::Identification => 2,
             State::Standby => 3,
             State::Transfer => 4,
+            State::Receiving => 6,
         }
     }
 }
@@ -101,7 +111,7 @@ enum Response {
     Long(u128),
 }
 
-/// A high-capacity card, read from an image file.
+/// A high-capacity card, held in an image file.
 pub struct Card {
     image: File,
     blocks: u64,
@@ -191,10 +201,35 @@ impl Card {
                 Response::Short(self.status())
             }
             (false, 17, State::Transfer) => return Err("CMD17 past the end of the card"),
+            // CMD24 writes one block and CMD25 several, until CMD12. The data follows
+            // the response.
+            (false, 24 | 25, State::Transfer) if u64::from(argument) < self.blocks => {
+                let status = self.status();
+                self.state = State::Receiving;
+                Response::Short(status)
+            }
+            (false, 24 | 25, State::Transfer) => return Err("a write past the end of the card"),
+            (false, 12, State::Receiving) => {
+                let status = self.status();
+                self.state = State::Transfer;
+                Response::Short(status)
+            }
             (true, 41, _) => return Err("ACMD41 outside the idle state, or as an enquiry"),
             _ => return Err("an SD command in a state Nebu does not model"),
         };
         Ok(response)
+    }
+
+    /// Writes `buffer` to block `block`. The image file is written at once, so what
+    /// NeOS writes is there the next time the image is used, as on a real card.
+    fn write(&mut self, block: u64, buffer: &[u8; BLOCK as usize]) -> Result<(), &'static str> {
+        if block >= self.blocks {
+            return Err("a write past the end of the card");
+        }
+        self.image
+            .seek(SeekFrom::Start(block * BLOCK))
+            .and_then(|_| self.image.write_all(buffer))
+            .map_err(|_| "writing the card image failed")
     }
 
     /// Reads block `block` into `buffer`.
@@ -217,9 +252,23 @@ pub struct Emmc {
     interrupt: u32,
     irpt_mask: u32,
     irpt_en: u32,
-    /// The block being read, and how many of its bytes have been read.
+    /// The block being read or written, and how many of its bytes have been read.
     block: [u8; BLOCK as usize],
     read: Option<usize>,
+    /// The write under way, if one is.
+    writing: Option<Writing>,
+}
+
+/// A write the controller is taking from NeOS, a block at a time.
+struct Writing {
+    /// The card's block the next whole block goes to.
+    block: u64,
+    /// How many blocks are still to come, this one included.
+    remaining: u32,
+    /// How many bytes of this block have arrived.
+    offset: usize,
+    /// Whether it is CMD25's, which CMD12 ends, rather than CMD24's.
+    multiple: bool,
 }
 
 impl Emmc {
@@ -236,6 +285,7 @@ impl Emmc {
             irpt_en: 0,
             block: [0; BLOCK as usize],
             read: None,
+            writing: None,
         }
     }
 
@@ -273,8 +323,10 @@ impl Emmc {
             DATA => return self.read_data().map(Some),
             STATUS => {
                 let reading = if self.read.is_some() { DAT_INHIBIT | READ_AVAILABLE } else { 0 };
+                let writing =
+                    if self.writing.is_some() { DAT_INHIBIT | WRITE_AVAILABLE } else { 0 };
                 let inserted = if self.card.is_some() { CARD_INSERTED } else { 0 };
-                reading | inserted
+                reading | writing | inserted
             }
             CONTROL1 => self.control1,
             INTERRUPT => self.status_register(),
@@ -297,6 +349,7 @@ impl Emmc {
             BLKSIZECNT => self.blksizecnt = value,
             ARG1 => self.arg1 = value,
             CMDTM => self.command(value, connected)?,
+            DATA => self.write_data(value)?,
             CONTROL1 if value & SRST_HC != 0 => self.reset(),
             CONTROL1 => {
                 // Resetting a line forgets what it was doing, and the interrupts
@@ -306,7 +359,8 @@ impl Emmc {
                 }
                 if value & SRST_DATA != 0 {
                     self.read = None;
-                    self.interrupt &= !(DATA_DONE | READ_RDY);
+                    self.writing = None;
+                    self.interrupt &= !(DATA_DONE | READ_RDY | WRITE_RDY);
                 }
                 let value = value & !(SRST_CMD | SRST_DATA | CLK_STABLE);
                 let stable = if value & CLK_INTLEN != 0 { CLK_STABLE } else { 0 };
@@ -333,14 +387,22 @@ impl Emmc {
         if self.read.is_some() {
             return Err("a command sent while a block is still being read");
         }
+        if self.writing.is_some() {
+            return Err("a command sent while blocks are still being written");
+        }
         if value & UNMODELLED_COMMAND_BITS != 0 {
-            return Err("a command type, multi-block transfer or automatic command");
+            return Err("a command type or automatic command");
         }
         let index = value >> 24 & 0x3F;
         let response_type = value >> 16 & 0b11;
         let data = value & DATA_PRESENT != 0;
-        if data && value & READ_FROM_CARD == 0 {
-            return Err("writing to the card");
+        let reading = value & READ_FROM_CARD != 0;
+        let multiple = value & (MULTI_BLOCK | BLOCK_COUNT_ENABLE);
+        if multiple != 0 && (multiple != MULTI_BLOCK | BLOCK_COUNT_ENABLE || reading || !data) {
+            return Err("a multi-block transfer that is not a counted write");
+        }
+        if data && !reading && index != if multiple != 0 { 25 } else { 24 } {
+            return Err("a write that is not CMD24 for one block or CMD25 for several");
         }
         let card = match &mut self.card {
             Some(card) if connected => card,
@@ -364,18 +426,65 @@ impl Emmc {
             _ => return Err("a command with the wrong response type"),
         }
         if data {
-            if u64::from(self.blksizecnt & 0xFFF) != BLOCK || self.blksizecnt >> 16 != 1 {
-                return Err("a transfer of anything but one 512-byte block");
+            let count = self.blksizecnt >> 16;
+            if u64::from(self.blksizecnt & 0xFFF) != BLOCK {
+                return Err("a transfer of blocks of anything but 512 bytes");
             }
-            card.read(u64::from(self.arg1), &mut self.block)?;
-            self.read = Some(0);
-            self.raise(READ_RDY);
+            if reading {
+                if count != 1 {
+                    return Err("a read of anything but one block");
+                }
+                card.read(u64::from(self.arg1), &mut self.block)?;
+                self.read = Some(0);
+                self.raise(READ_RDY);
+            } else {
+                let multiple = multiple != 0;
+                let remaining = if multiple { count } else { 1 };
+                if remaining == 0 {
+                    return Err("a write of no blocks");
+                }
+                let block = u64::from(self.arg1);
+                self.writing = Some(Writing { block, remaining, offset: 0, multiple });
+                self.raise(WRITE_RDY);
+            }
         }
         self.raise(CMD_DONE);
         // A card that holds the line busy has let go by now.
         if response_type == RESPONSE_BUSY {
             self.raise(DATA_DONE);
         }
+        Ok(())
+    }
+
+    /// Takes the next word of the block being written. A whole block goes to the
+    /// card at once, and the last finishes the transfer, since a busy card lets go
+    /// at once.
+    fn write_data(&mut self, word: u32) -> Result<(), &'static str> {
+        let Some(writing) = &mut self.writing else {
+            return Err("writing data with no write under way");
+        };
+        self.block[writing.offset..writing.offset + 4].copy_from_slice(&word.to_le_bytes());
+        writing.offset += 4;
+        if writing.offset < BLOCK as usize {
+            return Ok(());
+        }
+        let block = writing.block;
+        writing.block += 1;
+        writing.remaining -= 1;
+        writing.offset = 0;
+        let (last, multiple) = (writing.remaining == 0, writing.multiple);
+        let card = self.card.as_mut().ok_or("writing data with no card")?;
+        card.write(block, &self.block)?;
+        if !last {
+            self.raise(WRITE_RDY);
+            return Ok(());
+        }
+        self.writing = None;
+        // CMD24's card is done with its one block; CMD25's waits for CMD12.
+        if !multiple {
+            card.state = State::Transfer;
+        }
+        self.raise(DATA_DONE);
         Ok(())
     }
 
@@ -413,12 +522,14 @@ mod tests {
         file.set_len(4 << 30).unwrap();
         file.seek(SeekFrom::Start(BLOCK)).unwrap();
         file.write_all(bytes).unwrap();
-        let card = Card::new(File::open(&path).unwrap()).unwrap();
+        let image = File::options().read(true).write(true).open(&path).unwrap();
+        let card = Card::new(image).unwrap();
         std::fs::remove_file(&path).unwrap();
         let mut emmc = Emmc::new(Some(card));
         emmc.write(CONTROL1, CLK_INTLEN, true).unwrap();
         emmc.write(CONTROL1, CLK_INTLEN | CLK_EN, true).unwrap();
-        emmc.write(IRPT_MASK, 0xFFFF_0000 | READ_RDY | DATA_DONE | CMD_DONE, true).unwrap();
+        emmc.write(IRPT_MASK, 0xFFFF_0000 | READ_RDY | WRITE_RDY | DATA_DONE | CMD_DONE, true)
+            .unwrap();
         emmc
     }
 
@@ -430,6 +541,93 @@ mod tests {
         assert_eq!(status & (ERROR | CMD_DONE), CMD_DONE);
         emmc.write(INTERRUPT, CMD_DONE, true).unwrap();
         emmc.read(RESP0).unwrap().unwrap()
+    }
+
+    /// Identifies and selects the card, leaving it in the transfer state.
+    fn select(emmc: &mut Emmc) {
+        command(emmc, 0, 0);
+        command(emmc, 8 << 24 | 2 << 16, 0x1AA);
+        command(emmc, 55 << 24 | 2 << 16, 0);
+        command(emmc, 41 << 24 | 2 << 16, 0x4030_0000);
+        command(emmc, 2 << 24 | 1 << 16, 0);
+        command(emmc, 3 << 24 | 2 << 16, 0);
+        command(emmc, 7 << 24 | 3 << 16, RCA << 16);
+        emmc.write(INTERRUPT, DATA_DONE, true).unwrap();
+    }
+
+    /// Writes `blocks` blocks, each filled with its number, from block `first`.
+    fn write_blocks(emmc: &mut Emmc, first: u32, blocks: u32) {
+        let multiple = blocks > 1;
+        emmc.write(BLKSIZECNT, blocks << 16 | 512, true).unwrap();
+        let cmdtm = if multiple {
+            25 << 24 | 2 << 16 | DATA_PRESENT | MULTI_BLOCK | BLOCK_COUNT_ENABLE
+        } else {
+            24 << 24 | 2 << 16 | DATA_PRESENT
+        };
+        command(emmc, cmdtm, first);
+        for block in 0..blocks {
+            assert_eq!(emmc.read(INTERRUPT).unwrap(), Some(WRITE_RDY));
+            assert_eq!(emmc.read(STATUS).unwrap().unwrap() & WRITE_AVAILABLE, WRITE_AVAILABLE);
+            emmc.write(INTERRUPT, WRITE_RDY, true).unwrap();
+            for _ in 0..128 {
+                emmc.write(DATA, first + block, true).unwrap();
+            }
+        }
+        assert_eq!(emmc.read(INTERRUPT).unwrap(), Some(DATA_DONE));
+        assert_eq!(emmc.read(STATUS).unwrap().unwrap() & DAT_INHIBIT, 0);
+        emmc.write(INTERRUPT, DATA_DONE, true).unwrap();
+        if multiple {
+            command(emmc, 12 << 24 | 3 << 16, 0);
+            emmc.write(INTERRUPT, DATA_DONE, true).unwrap();
+        }
+    }
+
+    /// Reads block `block` and returns its first word.
+    fn first_word(emmc: &mut Emmc, block: u32) -> u32 {
+        emmc.write(BLKSIZECNT, 1 << 16 | 512, true).unwrap();
+        command(emmc, 17 << 24 | 2 << 16 | DATA_PRESENT | READ_FROM_CARD, block);
+        let word = emmc.read(DATA).unwrap().unwrap();
+        for _ in 1..128 {
+            emmc.read(DATA).unwrap();
+        }
+        emmc.write(INTERRUPT, READ_RDY | DATA_DONE, true).unwrap();
+        word
+    }
+
+    #[test]
+    fn writes_one_block_and_several() {
+        let mut emmc = controller("write", &[]);
+        select(&mut emmc);
+        write_blocks(&mut emmc, 3, 1);
+        assert_eq!(first_word(&mut emmc, 3), 3);
+        write_blocks(&mut emmc, 10, 3);
+        for block in 10..13 {
+            assert_eq!(first_word(&mut emmc, block), block);
+        }
+        assert_eq!(first_word(&mut emmc, 13), 0);
+        // A write past the end of the card halts.
+        emmc.write(BLKSIZECNT, 1 << 16 | 512, true).unwrap();
+        emmc.write(ARG1, 8 << 20, true).unwrap();
+        assert_eq!(
+            emmc.write(CMDTM, 24 << 24 | 2 << 16 | DATA_PRESENT, true),
+            Err("a write past the end of the card")
+        );
+    }
+
+    #[test]
+    fn halts_on_a_command_in_the_middle_of_a_write() {
+        let mut emmc = controller("write-midway", &[]);
+        select(&mut emmc);
+        emmc.write(BLKSIZECNT, 2 << 16 | 512, true).unwrap();
+        command(&mut emmc, 25 << 24 | 2 << 16 | DATA_PRESENT | MULTI_BLOCK | BLOCK_COUNT_ENABLE, 0);
+        assert_eq!(
+            emmc.write(CMDTM, 13 << 24 | 2 << 16, true),
+            Err("a command sent while blocks are still being written")
+        );
+        // Resetting the data line abandons it.
+        let control1 = emmc.read(CONTROL1).unwrap().unwrap();
+        emmc.write(CONTROL1, control1 | SRST_DATA, true).unwrap();
+        assert_eq!(emmc.write(DATA, 0, true), Err("writing data with no write under way"));
     }
 
     #[test]
@@ -485,16 +683,28 @@ mod tests {
     fn halts_on_what_it_does_not_model() {
         let mut emmc = controller("halts", &[]);
         assert_eq!(
-            emmc.write(CMDTM, 24 << 24 | 2 << 16 | DATA_PRESENT, true),
-            Err("writing to the card")
-        );
-        assert_eq!(
             emmc.write(CMDTM, 17 << 24 | 2 << 16, true),
             Err("an SD command in a state Nebu does not model")
         );
         assert_eq!(
-            emmc.write(CMDTM, 18 << 24 | 2 << 16 | DATA_PRESENT | READ_FROM_CARD | 1 << 5, true),
-            Err("a command type, multi-block transfer or automatic command")
+            emmc.write(
+                CMDTM,
+                18 << 24 | 2 << 16 | DATA_PRESENT | READ_FROM_CARD | MULTI_BLOCK,
+                true
+            ),
+            Err("a multi-block transfer that is not a counted write")
+        );
+        assert_eq!(
+            emmc.write(CMDTM, 25 << 24 | 2 << 16 | DATA_PRESENT | MULTI_BLOCK, true),
+            Err("a multi-block transfer that is not a counted write")
+        );
+        assert_eq!(
+            emmc.write(CMDTM, 24 << 24 | 2 << 16 | DATA_PRESENT | 1 << 2, true),
+            Err("a command type or automatic command")
+        );
+        assert_eq!(
+            emmc.write(CMDTM, 25 << 24 | 2 << 16 | DATA_PRESENT, true),
+            Err("a write that is not CMD24 for one block or CMD25 for several")
         );
         assert_eq!(emmc.write(0x28, 0, true), Ok(None));
         emmc.write(CONTROL1, 0, true).unwrap();

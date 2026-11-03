@@ -201,9 +201,13 @@ fn parse_load(argument: &str) -> Option<(String, u64)> {
     (!path.is_empty()).then(|| (path.to_string(), address))
 }
 
-/// Opens the SD card image at `path`, for reading only.
+/// Opens the SD card image at `path`, for reading and writing (ADR 0027).
 fn open_card(path: &str) -> Result<Card, String> {
-    let file = fs::File::open(path).map_err(|error| format!("cannot read {path}: {error}"))?;
+    let file = fs::File::options()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| format!("cannot open {path}: {error}"))?;
     Card::new(file).map_err(|error| format!("{path}: {error}"))
 }
 
