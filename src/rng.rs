@@ -1,5 +1,5 @@
 //! The BCM2835's hardware random number generator, as far as NeOS uses it
-//! (Nebu ADR 0030).
+//! (Nebu ADR 0032).
 //!
 //! Broadcom does not document it, and what is inside it is not public, so there is
 //! nothing to copy faithfully: what matters is that the registers behave as NeOS's

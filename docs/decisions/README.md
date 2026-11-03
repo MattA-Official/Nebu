@@ -42,4 +42,4 @@ works live here.
 | 0026 | [STRH (register)](0026-strh-register.md) | Accepted |
 | 0028 | [Writing to the SD card](0028-writing-to-the-sd-card.md) | Proposed |
 | 0029 | [CSNEG](0029-csneg.md) | Proposed |
-| 0030 | [The hardware random number generator](0030-the-random-number-generator.md) | Proposed |
+| 0032 | [The hardware random number generator](0032-the-random-number-generator.md) | Proposed |

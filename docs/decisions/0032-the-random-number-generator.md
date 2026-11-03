@@ -1,4 +1,4 @@
-# 0030. The hardware random number generator
+# 0032. The hardware random number generator
 
 - **Status:** Proposed
 - **Date:** 2026-11-03

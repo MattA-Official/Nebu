@@ -38,7 +38,7 @@ const EMMC_BASE: u64 = 0x3F30_0000;
 const EMMC_WINDOW: u64 = 0x100;
 /// The DWC2 USB controller (ADR 0024).
 const USB_BASE: u64 = 0x3F98_0000;
-/// The hardware random number generator (ADR 0030).
+/// The hardware random number generator (ADR 0032).
 const RNG_BASE: u64 = 0x3F10_4000;
 /// The size of the other devices' register windows.
 const DEVICE_WINDOW: u64 = 0x1000;
