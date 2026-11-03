@@ -27,9 +27,10 @@ through the firmware mailbox, keeps a framebuffer it can save as an image, runs
 the kernel's threads at EL0 with their system calls,
 preempts them with the virtual timer's interrupt, wakes its drivers with the
 system timer's, the UART's, the SD card controller's and the USB controller's,
-reads blocks from an SD card image, runs USB transfers to a hub and keyboard, and takes the exceptions and aborts the kernel's tests raise. Its output matches QEMU's byte for byte, including
+reads blocks from an SD card image, runs USB transfers to a hub and keyboard, gives
+out random words, and takes the exceptions and aborts the kernel's tests raise. Its output matches QEMU's byte for byte, including
 the panic path and the kernel's fault reports. It currently implements 95 A64
-instructions, 27 system registers, six kinds of exception and seven devices; see
+instructions, 27 system registers, six kinds of exception and eight devices; see
 [`docs/implemented.md`](docs/implemented.md).
 
 ## Building and running

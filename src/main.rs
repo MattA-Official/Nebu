@@ -14,6 +14,7 @@ mod local;
 mod mailbox;
 mod mmu;
 mod pl011;
+mod rng;
 mod system_timer;
 mod usb;
 mod usb_devices;
