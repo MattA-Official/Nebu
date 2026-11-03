@@ -4,7 +4,7 @@
 //! The controller follows the SD Host Controller Specification. Nebu runs each
 //! command the moment it is written, as QEMU 8.2 does, so a command, and a block's
 //! data, are ready before the next instruction. The card is a high-capacity card
-//! held in an image file, which it reads and writes (ADR 0027). Every command,
+//! held in an image file, which it reads and writes (ADR 0028). Every command,
 //! register or state NeOS does not use halts Nebu.
 
 use std::fs::File;

@@ -46,7 +46,7 @@ cargo build --release
 |------------------|--------|
 | `--semihosting`  | Lets `hlt #0xf000` make semihosting calls, as QEMU's `-semihosting` does. NeOS test builds use this to exit. |
 | `--trace`        | Prints every instruction to standard error before running it. |
-| `--sd <file>`    | Puts an SD card holding `<file>`, which must be a whole number of 512 KiB, larger than 2 GiB and at most 32 GiB, in the slot. NeOS's writes go to the file as they happen ([ADRs 0019](docs/decisions/0019-the-sd-card.md) and [0027](docs/decisions/0027-writing-to-the-sd-card.md)). |
+| `--sd <file>`    | Puts an SD card holding `<file>`, which must be a whole number of 512 KiB, larger than 2 GiB and at most 32 GiB, in the slot. NeOS's writes go to the file as they happen ([ADRs 0019](docs/decisions/0019-the-sd-card.md) and [0028](docs/decisions/0028-writing-to-the-sd-card.md)). |
 | `--load <file>@<address>` | Copies `<file>` into memory at `<address>` (hexadecimal, with `0x`) before starting, as the firmware does with `config.txt`'s `initramfs` and QEMU with `-device loader`. It may be repeated ([ADR 0022](docs/decisions/0022-loading-a-second-file.md)). |
 | `--screen <file.ppm>` | When the machine stops, saves what the screen shows to `<file.ppm>`, as QEMU's `screendump` does ([ADR 0023](docs/decisions/0023-the-framebuffer.md)). |
 | `--keyboard` | Plugs a USB keyboard into the USB port, behind a hub, as QEMU's `-device usb-kbd` does ([ADR 0024](docs/decisions/0024-the-usb-controller-and-keyboard.md)). |

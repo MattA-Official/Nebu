@@ -202,10 +202,10 @@ fn parse_load(argument: &str) -> Option<(String, u64)> {
     (!path.is_empty()).then(|| (path.to_string(), address))
 }
 
-/// Opens the SD card image at `path`, for reading and writing (ADR 0027).
+/// Opens the SD card image at `path`, for reading and writing (ADR 0028).
 fn open_card(path: &str) -> Result<Card, String> {
     // An image that may only be read still serves a kernel that only reads; a write
-    // to it halts (ADR 0027).
+    // to it halts (ADR 0028).
     let file = fs::File::options()
         .read(true)
         .write(true)

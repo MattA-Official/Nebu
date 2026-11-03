@@ -1,4 +1,4 @@
-# 0027. Writing to the SD card
+# 0028. Writing to the SD card
 
 - **Status:** Proposed
 - **Date:** 2026-11-03
