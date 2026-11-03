@@ -147,34 +147,120 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     }
-    let mut cpu = Cpu::new(LOAD_ADDRESS, semihosting);
+    // Core 0 starts at the kernel, as the firmware leaves it; the others wait in the
+    // firmware's stub for the spin table (ADR 0030).
+    let mut cores = vec![Core { cpu: Cpu::new(LOAD_ADDRESS, semihosting), state: State::Running }];
+    for core in 1..CORES {
+        cores.push(Core { cpu: Cpu::in_stub(core, semihosting), state: State::InStub });
+    }
+    let mut now = 0;
 
     loop {
-        match cpu.step(&mut bus, trace) {
-            Ok(Step::Continue) => {}
-            Ok(Step::Exit(code)) => {
-                save_screen(&bus, screen.as_deref());
-                return ExitCode::from(code as u8);
+        // One count of the counter is one instruction on every core that runs (ADRs
+        // 0016 and 0030). The cores take turns in order, one instruction each, so a
+        // run gives the same result every time.
+        now += 1;
+        bus.advance(now);
+        let mut events = false;
+        for core in &mut cores {
+            match core.state {
+                State::Running => {}
+                State::WaitingForInterrupt if core.cpu.irq_pending(&mut bus, now) => {
+                    core.state = State::Running;
+                }
+                State::WaitingForEvent if core.cpu.take_event() => core.state = State::Running,
+                State::InStub if core.cpu.take_event() => {
+                    let word = SPIN_TABLE + 8 * u64::from(core.cpu.core);
+                    let entry = bus.read(word, 8).unwrap_or(0);
+                    if entry != 0 {
+                        core.cpu.leave_stub(entry, SPIN_TABLE);
+                        core.state = State::Running;
+                    }
+                }
+                State::WaitingForInterrupt | State::WaitingForEvent | State::InStub => continue,
             }
-            Ok(Step::Asleep) => {
+            if core.state != State::Running {
+                continue;
+            }
+            match core.cpu.step(&mut bus, now, trace) {
+                Ok(Step::Continue) => {}
+                Ok(Step::Event) => events = true,
+                Ok(Step::Asleep) => core.state = State::WaitingForEvent,
+                Ok(Step::WaitingForInterrupt) => core.state = State::WaitingForInterrupt,
+                Ok(Step::Exit(code)) => {
+                    save_screen(&bus, screen.as_deref());
+                    return ExitCode::from(code as u8);
+                }
+                Err(fault) => {
+                    eprintln!(
+                        "nebu: core {} stopped at pc {:#010x}: {fault}",
+                        core.cpu.core, core.cpu.pc
+                    );
+                    dump_registers(&core.cpu);
+                    save_screen(&bus, screen.as_deref());
+                    return ExitCode::from(FAULT_EXIT_CODE);
+                }
+            }
+        }
+        if events {
+            cores.iter_mut().for_each(|core| core.cpu.send_event());
+        }
+        if cores.iter().any(|core| core.state == State::Running) {
+            continue;
+        }
+
+        // Every core waits. If one waits for an interrupt that is due, skip straight
+        // to it: the next count finds it raised (ADR 0017).
+        let due = cores
+            .iter()
+            .filter(|core| core.state == State::WaitingForInterrupt)
+            .filter_map(|core| core.cpu.next_interrupt(&bus))
+            .min();
+        match due {
+            // A deadline that has passed is already due.
+            Some(due) => now = now.max(due.saturating_sub(1)),
+            // With nothing due, only input to the UART can wake a core (ADR 0018).
+            None if cores.iter().any(|core| core.state == State::WaitingForInterrupt)
+                && bus.wait_for_input() => {}
+            None => {
                 // Nothing will change the screen now, so it is saved before waiting.
                 save_screen(&bus, screen.as_deref());
-                // Nothing in Nebu can send an event, and no interrupt is due or can be
-                // raised by input, so the core sleeps forever, as it would in QEMU.
-                eprintln!("nebu: core 0 is waiting for something that nothing can send");
+                // No core can send an event, and no interrupt is due or can be raised
+                // by input, so the cores sleep forever, as they would in QEMU.
+                eprintln!("nebu: every core is waiting for something that nothing can send");
                 eprintln!("nebu: press Ctrl-C to quit");
                 loop {
                     thread::park();
                 }
             }
-            Err(fault) => {
-                eprintln!("nebu: stopped at pc {:#010x}: {fault}", cpu.pc);
-                dump_registers(&cpu);
-                save_screen(&bus, screen.as_deref());
-                return ExitCode::from(FAULT_EXIT_CODE);
-            }
         }
     }
+}
+
+/// How many cores the BCM2837 has (ADR 0030).
+const CORES: u8 = 4;
+
+/// The firmware's spin table: core n waits in the stub until the word at this address
+/// plus 8n holds where to start (ADR 0030).
+const SPIN_TABLE: u64 = 0xD8;
+
+/// One core, and what it is doing.
+struct Core {
+    cpu: Cpu,
+    state: State,
+}
+
+/// What a core is doing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum State {
+    /// Running instructions.
+    Running,
+    /// In `wfi`, until an interrupt is pending.
+    WaitingForInterrupt,
+    /// In `wfe`, until an event.
+    WaitingForEvent,
+    /// In the firmware's stub, until an event finds an address in the spin table.
+    InStub,
 }
 
 /// Saves what the screen shows to `path`, if one was asked for, as a binary PPM

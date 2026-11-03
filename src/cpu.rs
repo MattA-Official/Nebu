@@ -55,6 +55,10 @@ pub enum Step {
     Continue,
     /// The core is waiting for an event (`wfe`).
     Asleep,
+    /// The core is waiting for an interrupt (`wfi`), and none is pending.
+    WaitingForInterrupt,
+    /// The core sent an event to every core (`sev`).
+    Event,
     /// The software asked to end the run with this exit code (semihosting).
     Exit(i32),
 }
@@ -205,6 +209,8 @@ pub struct Cpu {
     event: bool,
     /// Whether `hlt #0xf000` makes semihosting calls.
     semihosting: bool,
+    /// Which core this is, from 0 to 3 (ADR 0030).
+    pub core: u8,
 }
 
 impl Cpu {
@@ -231,7 +237,40 @@ impl Cpu {
             sys: SystemRegisters::default(),
             event: false,
             semihosting,
+            core: 0,
         }
+    }
+
+    /// Creates core `core`, 1 to 3, waiting in the firmware's stub for the kernel to
+    /// give it an address in the spin table (ADR 0030). It starts at EL2 with every
+    /// exception masked, as core 0 does.
+    pub fn in_stub(core: u8, semihosting: bool) -> Self {
+        let mut cpu = Cpu::new(0, semihosting);
+        cpu.x = [0; 31];
+        cpu.flags = Flags::default();
+        cpu.core = core;
+        cpu
+    }
+
+    /// Leaves the firmware's stub for `entry`, as the stub does once the spin table
+    /// gives it an address: x0 to x3 are 0, x4 holds the address, x5 the spin table's
+    /// address and x6 the core's number, and the core is at EL2 (ADR 0030).
+    pub fn leave_stub(&mut self, entry: u64, spin_table: u64) {
+        self.x[4] = entry;
+        self.x[5] = spin_table;
+        self.x[6] = u64::from(self.core);
+        self.pc = entry;
+    }
+
+    /// Whether the event register is set, which `wfe` and the firmware's stub wait
+    /// on. Clears it.
+    pub fn take_event(&mut self) -> bool {
+        std::mem::take(&mut self.event)
+    }
+
+    /// Sets the event register, as another core's `sev` does.
+    pub fn send_event(&mut self) {
+        self.event = true;
     }
 
     /// The stack pointer in use: SP_ELx for the current EL, or SP_EL0.
@@ -375,7 +414,7 @@ impl Cpu {
         }
         use SystemRegister::*;
         Ok(match register {
-            MpidrEl1 => MPIDR_CORE_0,
+            MpidrEl1 => MPIDR_CORE_0 | u64::from(self.core),
             CurrentEl => u64::from(self.el) << 2,
             SctlrEl1 => self.sys.translation.sctlr,
             TcrEl1 => self.sys.translation.tcr,
@@ -464,6 +503,10 @@ impl Cpu {
             // Only the firmware sets the rate, before the kernel starts.
             CntfrqEl0 => return Err(Fault::Unsupported("writing CNTFRQ_EL0")),
             // ISTATUS only reads, so a write keeps only ENABLE and IMASK.
+            // Only core 0's timer reaches the local block's model (ADR 0030).
+            CntvCtlEl0 if self.core != 0 && value & CNTV_CTL_ENABLE != 0 => {
+                return Err(Fault::Unsupported("the timer of cores 1 to 3"));
+            }
             CntvCtlEl0 => self.sys.cntv_ctl_el0 = value & (CNTV_CTL_ENABLE | CNTV_CTL_IMASK),
             CntvCvalEl0 => self.sys.cntv_cval_el0 = value,
             // EL0 is kept away from the timers, and no events are raised from the
@@ -599,15 +642,42 @@ impl Cpu {
     ///
     /// If the instruction's fetch or one of its data accesses fails translation, the
     /// CPU takes an abort instead, and the next instruction is the abort handler's.
-    pub fn step(&mut self, bus: &mut Bus, trace: bool) -> Result<Step, Fault> {
-        self.count = self.count.wrapping_add(1);
-        bus.advance(self.count);
+    /// Brings the virtual timer's line up to date, and says whether this core has an
+    /// IRQ pending, masked or not. Only core 0 has interrupts (ADRs 0016 and 0030).
+    pub fn irq_pending(&mut self, bus: &mut Bus, now: u64) -> bool {
+        self.count = now;
+        if self.core != 0 {
+            return false;
+        }
         // The virtual timer's interrupt reaches the core through the local
-        // interrupt controller, and is taken between instructions when PSTATE.I is
-        // clear (ADR 0016).
+        // interrupt controller (ADR 0016).
         let firing = self.virtual_timer_met() && self.sys.cntv_ctl_el0 & CNTV_CTL_IMASK == 0;
         bus.set_virtual_timer(firing);
-        if bus.irq_pending() && self.daif & DAIF_I == 0 {
+        bus.irq_pending()
+    }
+
+    /// Whether an IRQ is pending and PSTATE.I lets the core take it, between
+    /// instructions.
+    fn take_pending_irq(&mut self, bus: &mut Bus) -> bool {
+        self.irq_pending(bus, self.count) && self.daif & DAIF_I == 0
+    }
+
+    /// The counter at which an interrupt will next be raised for this core, while it
+    /// waits for one: its virtual timer's deadline, or the next device interrupt.
+    /// None if only input to the UART could raise one (ADRs 0017 and 0018).
+    pub fn next_interrupt(&self, bus: &Bus) -> Option<u64> {
+        if self.core != 0 {
+            return None;
+        }
+        let timer = (self.sys.cntv_ctl_el0 & (CNTV_CTL_ENABLE | CNTV_CTL_IMASK) == CNTV_CTL_ENABLE
+            && bus.virtual_timer_routed())
+        .then(|| self.sys.cntv_cval_el0.saturating_add(self.sys.cntvoff_el2));
+        [timer, bus.next_device_interrupt()].into_iter().flatten().min()
+    }
+
+    pub fn step(&mut self, bus: &mut Bus, now: u64, trace: bool) -> Result<Step, Fault> {
+        self.count = now;
+        if self.take_pending_irq(bus) {
             if trace {
                 eprintln!("irq at {:#010x}", self.pc);
             }
@@ -945,10 +1015,12 @@ impl Cpu {
             // for and there is nothing to invalidate.
             Nop | Isb | Dsb { .. } => {}
             // These are undefined at EL0, as on hardware.
-            IcIallu | TlbiVmalle1 | TlbiAside1 { .. } if self.el == 0 => {
+            IcIallu | TlbiVmalle1 | TlbiAside1 { .. } | TlbiVmalle1is | TlbiAside1is { .. }
+                if self.el == 0 =>
+            {
                 next = self.take_exception(EC_UNKNOWN, 0, pc)?
             }
-            IcIallu | TlbiVmalle1 | TlbiAside1 { .. } => {}
+            IcIallu | TlbiVmalle1 | TlbiAside1 { .. } | TlbiVmalle1is | TlbiAside1is { .. } => {}
             // Nor are data caches, so there is nothing to clean, but the address must
             // still translate, as on hardware.
             DcCivac { rt } => {
@@ -957,34 +1029,21 @@ impl Cpu {
                 }
                 self.translate(bus, self.read(rt, Width::W64), Access::Read)?;
             }
-            // WFI waits for an interrupt to be pending, even a masked one. Nebu skips
-            // straight to the next one due (ADR 0017), or waits for input (ADR 0018).
             Wfi if self.el == 0 => {
                 return Err(Fault::Unsupported("wfi at EL0").into());
             }
-            Wfi if bus.irq_pending() => {}
-            Wfi => {
-                let timer = (self.sys.cntv_ctl_el0 & (CNTV_CTL_ENABLE | CNTV_CTL_IMASK)
-                    == CNTV_CTL_ENABLE
-                    && bus.virtual_timer_routed())
-                .then(|| self.sys.cntv_cval_el0.saturating_add(self.sys.cntvoff_el2));
-                match [timer, bus.next_device_interrupt()].into_iter().flatten().min() {
-                    // The next step counts one more, and finds the interrupt raised.
-                    // A deadline that has passed is already due.
-                    Some(due) => self.count = self.count.max(due.saturating_sub(1)),
-                    // With nothing due, only input to the UART can wake the core
-                    // (ADR 0018).
-                    None if bus.wait_for_input() => {}
-                    None => result = Step::Asleep,
-                }
-            }
+            // WFI waits for an interrupt to be pending, even a masked one. The machine
+            // skips straight to the next one due once every core waits (ADRs 0017
+            // and 0030), or waits for input (ADR 0018).
+            Wfi if self.irq_pending(bus, self.count) => {}
+            Wfi => result = Step::WaitingForInterrupt,
             Wfe => {
-                if self.event {
-                    self.event = false;
-                } else {
+                if !self.take_event() {
                     result = Step::Asleep;
                 }
             }
+            // SEV sets the event register of every core, this one too.
+            Sev => result = Step::Event,
             Mrs { rt, register } => {
                 let value = self.read_system_register(register)?;
                 self.write(rt, Width::W64, value);
@@ -1068,6 +1127,24 @@ impl Cpu {
                 let offset = self.extend_register(rm, extend) << amount;
                 let address = self.base(rn)?.wrapping_add(offset);
                 self.store(bus, address, width.bytes(), self.read(rt, width))?;
+            }
+            // Nebu runs one instruction at a time and has no caches, so every access
+            // is already ordered; these only need to be aligned, as on hardware.
+            Ldar { bytes, rt, rn } => {
+                let address = self.read_sp(rn, Width::W64);
+                if !address.is_multiple_of(u64::from(bytes)) {
+                    return Err(Fault::Unsupported("a misaligned load-acquire").into());
+                }
+                let value = self.load(bus, address, u64::from(bytes))?;
+                self.write(rt, if bytes == 8 { Width::W64 } else { Width::W32 }, value);
+            }
+            Stlr { bytes, rt, rn } => {
+                let address = self.read_sp(rn, Width::W64);
+                if !address.is_multiple_of(u64::from(bytes)) {
+                    return Err(Fault::Unsupported("a misaligned store-release").into());
+                }
+                let width = if bytes == 8 { Width::W64 } else { Width::W32 };
+                self.store(bus, address, u64::from(bytes), self.read(rt, width))?;
             }
             StrbImmediate { rt, rn, index, offset } => {
                 let (address, writeback) = self.address(rn, index, offset)?;
@@ -1308,13 +1385,21 @@ mod tests {
     }
 
     /// Runs `program` from address 0x80000 until it stops.
+    /// Runs one instruction on a core of its own, a count after the last, as the
+    /// machine in `main` does.
+    fn tick(cpu: &mut Cpu, bus: &mut Bus) -> Result<Step, Fault> {
+        let now = cpu.count + 1;
+        bus.advance(now);
+        cpu.step(bus, now, false)
+    }
+
     fn run(program: &[u32], steps: usize) -> (Cpu, Bus) {
         let mut bus = Bus::new(uart());
         let bytes: Vec<u8> = program.iter().flat_map(|word| word.to_le_bytes()).collect();
         bus.load(0x80000, &bytes).unwrap();
         let mut cpu = Cpu::new(0x80000, true);
         for _ in 0..steps {
-            cpu.step(&mut bus, false).unwrap();
+            tick(&mut cpu, &mut bus).unwrap();
         }
         (cpu, bus)
     }
@@ -1380,7 +1465,7 @@ mod tests {
         bus.load(0x80000, &0x310004bfu32.to_le_bytes()).unwrap();
         let mut cpu = Cpu::new(0x80000, false);
         cpu.x[5] = 0xFFFF_FFFF;
-        cpu.step(&mut bus, false).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
         assert_eq!(cpu.flags, Flags { n: false, z: true, c: true, v: false });
     }
 
@@ -1393,7 +1478,7 @@ mod tests {
             let mut cpu = Cpu::new(0x80000, false);
             cpu.x[9] = 5;
             cpu.flags = Flags { n: true, z: false, c: carry, v: false };
-            cpu.step(&mut bus, false).unwrap();
+            tick(&mut cpu, &mut bus).unwrap();
             assert_eq!(cpu.x[16], expected);
             assert_eq!(cpu.flags, Flags { n: true, z: false, c: carry, v: false });
         }
@@ -1402,7 +1487,7 @@ mod tests {
         bus.load(0x80000, &0x5a020020u32.to_le_bytes()).unwrap();
         let mut cpu = Cpu::new(0x80000, false);
         (cpu.x[1], cpu.x[2]) = (0xFFFF_FFFF_0000_0001, 3);
-        cpu.step(&mut bus, false).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
         assert_eq!(cpu.x[0], 0xFFFF_FFFD);
     }
 
@@ -1415,7 +1500,7 @@ mod tests {
             bus.load(0x90004, &word.to_le_bytes()).unwrap();
             let mut cpu = Cpu::new(0x80000, false);
             (cpu.x[10], cpu.x[0]) = (0x90000, 1);
-            cpu.step(&mut bus, false).unwrap();
+            tick(&mut cpu, &mut bus).unwrap();
             assert_eq!(cpu.x[12], expected);
         }
     }
@@ -1429,7 +1514,7 @@ mod tests {
             bus.load(0x90000, &[0x11, 0x11, 0x22, 0x22, 0x33, 0x33]).unwrap();
             let mut cpu = Cpu::new(0x80000, false);
             (cpu.x[8], cpu.x[9]) = (2, 0x90000);
-            cpu.step(&mut bus, false).unwrap();
+            tick(&mut cpu, &mut bus).unwrap();
             let byte = u64::from([0x11u8, 0x22, 0x33][(address - 0x90000) / 2]);
             assert_eq!(cpu.x[8], byte << 8 | byte);
         }
@@ -1442,7 +1527,7 @@ mod tests {
         bus.load(0x80000, &0x78297b4bu32.to_le_bytes()).unwrap();
         let mut cpu = Cpu::new(0x80000, false);
         (cpu.x[9], cpu.x[11], cpu.x[26]) = (2, 0xAAAA_BEEF, 0x90000);
-        cpu.step(&mut bus, false).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
         let mut stored = [0; 6];
         for (offset, byte) in stored.iter_mut().enumerate() {
             *byte = bus.read(0x90000 + offset as u64, 1).unwrap() as u8;
@@ -1460,7 +1545,7 @@ mod tests {
             bus.load(0x90003, &[0x80]).unwrap();
             let mut cpu = Cpu::new(0x80000, false);
             (cpu.x[0], cpu.x[9], cpu.x[13]) = (0x90000, 3, u64::MAX);
-            cpu.step(&mut bus, false).unwrap();
+            tick(&mut cpu, &mut bus).unwrap();
             assert_eq!(cpu.x[13], expected);
         }
     }
@@ -1472,7 +1557,7 @@ mod tests {
         bus.load(0x80000, &0x382b6b0au32.to_le_bytes()).unwrap();
         let mut cpu = Cpu::new(0x80000, false);
         (cpu.x[10], cpu.x[24], cpu.x[11]) = (0x1234, 0x90000, 5);
-        cpu.step(&mut bus, false).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
         assert_eq!(bus.read(0x90005, 1).unwrap(), 0x34);
         assert_eq!(bus.read(0x90006, 1).unwrap(), 0);
     }
@@ -1503,7 +1588,7 @@ mod tests {
         cpu.el = 1;
         cpu.sys.elr_el1 = 0x1234;
         cpu.sys.spsr_el1 = 0x6000_0000; // Z and C set, EL0t, nothing masked
-        cpu.step(&mut bus, false).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
         assert_eq!((cpu.el, cpu.spsel, cpu.pc, cpu.daif), (0, false, 0x1234, 0));
         assert_eq!(cpu.flags, Flags { n: false, z: true, c: true, v: false });
     }
@@ -1517,7 +1602,7 @@ mod tests {
         cpu.spsel = false;
         cpu.daif = 0b1111;
         cpu.sys.vbar_el1 = 0x1000;
-        cpu.step(&mut bus, false).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
         // EC 0x15 with IL and the immediate; it returns to the next instruction.
         assert_eq!(cpu.sys.esr_el1, 0x5600_0001);
         assert_eq!(cpu.sys.elr_el1, 0x80004);
@@ -1533,7 +1618,7 @@ mod tests {
         cpu.el = 0;
         cpu.spsel = false;
         cpu.sys.vbar_el1 = 0x1000;
-        cpu.step(&mut bus, false).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
         // EC 0 (unknown reason), returning to the instruction itself.
         assert_eq!(cpu.sys.esr_el1 >> 26, 0);
         assert_eq!(cpu.sys.elr_el1, 0x80000);
@@ -1549,8 +1634,8 @@ mod tests {
         cpu.el = 0;
         cpu.spsel = false;
         cpu.write(8, Width::W64, 0x1234);
-        cpu.step(&mut bus, false).unwrap();
-        cpu.step(&mut bus, false).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
         assert_eq!(cpu.read(9, Width::W64), 0x1234);
         assert_eq!(cpu.el, 0);
     }
@@ -1565,7 +1650,7 @@ mod tests {
         cpu.sp_el[1] = 0x9000;
         cpu.write(0, Width::W64, 0x9010);
         let flags = cpu.flags;
-        cpu.step(&mut bus, false).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
         // 0x9000 - 0x9010 wraps, and the flags stay as they were.
         assert_eq!(cpu.read(0, Width::W64), 0xffff_ffff_ffff_fff0);
         assert_eq!(cpu.flags, flags);
@@ -1579,15 +1664,15 @@ mod tests {
         let mut cpu = Cpu::new(0x80000, false);
         cpu.el = 1;
         cpu.write(0, Width::W64, 0x5678);
-        cpu.step(&mut bus, false).unwrap();
-        cpu.step(&mut bus, false).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
         assert_eq!(cpu.read(1, Width::W64), 0x5678);
         cpu.pc = 0x80004;
         cpu.el = 0;
         cpu.spsel = false;
         let register = SystemRegister::TpidrEl1;
         assert_eq!(
-            cpu.step(&mut bus, false),
+            tick(&mut cpu, &mut bus),
             Err(Fault::SystemRegisterAccess { register, el: 0, write: false })
         );
     }
@@ -1602,15 +1687,15 @@ mod tests {
         cpu.spsel = false;
         let register = SystemRegister::CntvctEl0;
         assert_eq!(
-            cpu.step(&mut bus, false),
+            tick(&mut cpu, &mut bus),
             Err(Fault::SystemRegisterAccess { register, el: 0, write: false })
         );
         cpu.pc = 0x80000;
         cpu.el = 1;
         cpu.write(1, Width::W64, CNTKCTL_EL0VCTEN);
-        cpu.step(&mut bus, false).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
         cpu.el = 0;
-        cpu.step(&mut bus, false).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
         assert!(cpu.read(2, Width::W64) > 0);
     }
 
@@ -1622,7 +1707,7 @@ mod tests {
         cpu.el = 1;
         let register = SystemRegister::HcrEl2;
         assert_eq!(
-            cpu.step(&mut bus, false),
+            tick(&mut cpu, &mut bus),
             Err(Fault::SystemRegisterAccess { register, el: 1, write: true })
         );
     }
@@ -1669,8 +1754,8 @@ mod tests {
             ttbr0: 0,
             ttbr1: 0x10000,
         };
-        cpu.step(&mut bus, false).unwrap();
-        cpu.step(&mut bus, false).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
+        tick(&mut cpu, &mut bus).unwrap();
         // A level 0 translation fault on a write, from the kernel, at the store.
         assert_eq!(cpu.sys.esr_el1, 0x9600_0044);
         assert_eq!(cpu.sys.far_el1, 0x1000);
@@ -1688,9 +1773,9 @@ mod tests {
         let mut cpu = Cpu::new(0x80000, true);
         cpu.x[0] = SYS_EXIT;
         cpu.x[1] = 0x1000;
-        assert_eq!(cpu.step(&mut bus, false), Ok(Step::Exit(7)));
+        assert_eq!(tick(&mut cpu, &mut bus), Ok(Step::Exit(7)));
 
         let mut cpu = Cpu::new(0x80000, false);
-        assert_eq!(cpu.step(&mut bus, false), Err(Fault::Halt { imm16: 0xf000 }));
+        assert_eq!(tick(&mut cpu, &mut bus), Err(Fault::Halt { imm16: 0xf000 }));
     }
 }
