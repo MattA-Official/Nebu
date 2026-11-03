@@ -220,8 +220,9 @@ fn main() -> ExitCode {
             // A deadline that has passed is already due.
             Some(due) => now = now.max(due.saturating_sub(1)),
             // With nothing due, only input to the UART can wake a core (ADR 0018).
-            None if cores.iter().any(|core| core.state == State::WaitingForInterrupt)
-                && bus.wait_for_input() => {}
+            None if cores.iter().any(|core| {
+                core.state == State::WaitingForInterrupt && core.cpu.takes_interrupts()
+            }) && bus.wait_for_input() => {}
             None => {
                 // Nothing will change the screen now, so it is saved before waiting.
                 save_screen(&bus, screen.as_deref());

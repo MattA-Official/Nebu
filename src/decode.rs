@@ -90,6 +90,12 @@ pub enum Extend {
 pub enum SystemRegister {
     /// The multiprocessor affinity register: which core this is.
     MpidrEl1,
+    /// The main ID register: which CPU this is (ADR 0030).
+    MidrEl1,
+    /// What MIDR_EL1 reads as at EL1 (ADR 0030).
+    VpidrEl2,
+    /// What MPIDR_EL1 reads as at EL1 (ADR 0030).
+    VmpidrEl2,
     /// The current exception level.
     CurrentEl,
     /// EL1's system control register: the MMU, caches and alignment checks.
@@ -153,6 +159,9 @@ impl SystemRegister {
     fn from_encoding(op0: u8, op1: u8, crn: u8, crm: u8, op2: u8) -> Option<Self> {
         Some(match (op0, op1, crn, crm, op2) {
             (3, 0, 0, 0, 5) => SystemRegister::MpidrEl1,
+            (3, 0, 0, 0, 0) => SystemRegister::MidrEl1,
+            (3, 4, 0, 0, 0) => SystemRegister::VpidrEl2,
+            (3, 4, 0, 0, 5) => SystemRegister::VmpidrEl2,
             (3, 0, 4, 2, 2) => SystemRegister::CurrentEl,
             (3, 0, 1, 0, 0) => SystemRegister::SctlrEl1,
             (3, 0, 4, 0, 0) => SystemRegister::SpsrEl1,
@@ -188,6 +197,9 @@ impl SystemRegister {
     pub fn name(self) -> &'static str {
         match self {
             SystemRegister::MpidrEl1 => "MPIDR_EL1",
+            SystemRegister::MidrEl1 => "MIDR_EL1",
+            SystemRegister::VpidrEl2 => "VPIDR_EL2",
+            SystemRegister::VmpidrEl2 => "VMPIDR_EL2",
             SystemRegister::CurrentEl => "CurrentEL",
             SystemRegister::SctlrEl1 => "SCTLR_EL1",
             SystemRegister::SpsrEl1 => "SPSR_EL1",
@@ -393,6 +405,8 @@ pub enum Instruction {
     Dsb { option: u8 },
     /// IC IALLU: invalidate the whole instruction cache.
     IcIallu,
+    /// IC IALLUIS: IC IALLU on every core (ADR 0030).
+    IcIalluis,
     /// DC CIVAC: clean and invalidate the data cache line holding the address in
     /// `rt`, to the point of coherency.
     DcCivac { rt: u8 },
@@ -785,6 +799,7 @@ fn system(word: u32) -> Result<Instruction, DecodeError> {
         // SYS: cache and TLB maintenance and address translation.
         (0, 1, _, _) => match (op1, crn, crm, op2, rt) {
             (0, 7, 5, 0, 31) => Ok(Instruction::IcIallu),
+            (0, 7, 1, 0, 31) => Ok(Instruction::IcIalluis),
             (0, 8, 7, 0, 31) => Ok(Instruction::TlbiVmalle1),
             (0, 8, 7, 2, rt) => Ok(Instruction::TlbiAside1 { rt }),
             (0, 8, 3, 0, 31) => Ok(Instruction::TlbiVmalle1is),
@@ -1558,6 +1573,7 @@ impl fmt::Display for Instruction {
                 name => write!(f, "dsb {name}"),
             },
             IcIallu => write!(f, "ic iallu"),
+            IcIalluis => write!(f, "ic ialluis"),
             DcCivac { rt } => write!(f, "dc civac, {}", zr(rt, Width::W64)),
             TlbiVmalle1 => write!(f, "tlbi vmalle1"),
             TlbiAside1 { rt } => write!(f, "tlbi aside1, {}", zr(rt, Width::W64)),
@@ -2067,6 +2083,8 @@ mod tests {
         assert_eq!(decode(0x9acb2949), Err(DecodeError::Unimplemented)); // asrv x9, x10, x11
         assert_eq!(decode(0x5a8b350a), Err(DecodeError::Unimplemented)); // csneg w10, w8, w11, lo
         assert_eq!(decode(0xd503209f).unwrap().to_string(), "sev");
+        assert_eq!(decode(0xd508711f).unwrap().to_string(), "ic ialluis");
+        assert_eq!(decode(0xd53c00a1).unwrap().to_string(), "mrs x1, VMPIDR_EL2");
         assert_eq!(decode(0xc89ffd60).unwrap().to_string(), "stlr x0, [x11]");
         assert_eq!(decode(0x08dffc20).unwrap().to_string(), "ldarb w0, [x1]");
         assert_eq!(decode(0x089ffc20).unwrap().to_string(), "stlrb w0, [x1]");

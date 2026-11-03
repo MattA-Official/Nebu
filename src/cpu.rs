@@ -16,6 +16,9 @@ use crate::mmu::{self, Access, SCTLR_M};
 /// in the low byte.
 const MPIDR_CORE_0: u64 = 0x8000_0000;
 
+/// MIDR_EL1 for the Pi 3's Cortex-A53, r0p4, as QEMU's `raspi3b` reports it.
+const MIDR: u64 = 0x410F_D034;
+
 /// The rate the generic timer's counter counts at: 62.5 MHz, as QEMU's `raspi3b`
 /// reports in CNTFRQ_EL0 (ADR 0016).
 const COUNTER_FREQUENCY: u64 = 62_500_000;
@@ -241,6 +244,11 @@ impl Cpu {
         }
     }
 
+    /// MPIDR_EL1: bit 31 set, and the core's number in the low byte.
+    fn mpidr(&self) -> u64 {
+        MPIDR_CORE_0 | u64::from(self.core)
+    }
+
     /// Creates core `core`, 1 to 3, waiting in the firmware's stub for the kernel to
     /// give it an address in the spin table (ADR 0030). It starts at EL2 with every
     /// exception masked, as core 0 does.
@@ -394,8 +402,8 @@ impl Cpu {
             // EL0 may read the counter and its frequency when CNTKCTL_EL1.EL0VCTEN is
             // set (ADR 0019).
             CntfrqEl0 | CntvctEl0 if self.sys.cntkctl_el1 & CNTKCTL_EL0VCTEN != 0 => 0,
-            MpidrEl1 | CurrentEl | SctlrEl1 | SpsrEl1 | ElrEl1 | SpEl0 | EsrEl1 | FarEl1
-            | VbarEl1 | TcrEl1 | MairEl1 | Ttbr0El1 | Ttbr1El1 | CpacrEl1 | TpidrEl1 => 1,
+            MpidrEl1 | MidrEl1 | CurrentEl | SctlrEl1 | SpsrEl1 | ElrEl1 | SpEl0 | EsrEl1
+            | FarEl1 | VbarEl1 | TcrEl1 | MairEl1 | Ttbr0El1 | Ttbr1El1 | CpacrEl1 | TpidrEl1 => 1,
             // EL0 can read it only when SCTLR_EL1.UCT is set, which Nebu does not allow.
             CtrEl0 => 1,
             TpidrEl0 => 0,
@@ -403,7 +411,7 @@ impl Cpu {
             // counter and its frequency.
             CntfrqEl0 | CntvctEl0 | CntvCtlEl0 | CntvCvalEl0 => 1,
             CntkctlEl1 => 1,
-            HcrEl2 | CnthctlEl2 | CntvoffEl2 | SpsrEl2 | ElrEl2 | SpEl1 => 2,
+            HcrEl2 | CnthctlEl2 | CntvoffEl2 | SpsrEl2 | ElrEl2 | SpEl1 | VpidrEl2 | VmpidrEl2 => 2,
         }
     }
 
@@ -414,7 +422,10 @@ impl Cpu {
         }
         use SystemRegister::*;
         Ok(match register {
-            MpidrEl1 => MPIDR_CORE_0 | u64::from(self.core),
+            // VMPIDR_EL2 and VPIDR_EL2 always hold the real values (ADR 0030), so EL1
+            // reads the same as EL2.
+            MpidrEl1 | VmpidrEl2 => self.mpidr(),
+            MidrEl1 | VpidrEl2 => MIDR,
             CurrentEl => u64::from(self.el) << 2,
             SctlrEl1 => self.sys.translation.sctlr,
             TcrEl1 => self.sys.translation.tcr,
@@ -455,7 +466,14 @@ impl Cpu {
         }
         use SystemRegister::*;
         match register {
-            MpidrEl1 | CurrentEl | EsrEl1 | FarEl1 | CtrEl0 | CntvctEl0 => {
+            // NeOS copies the real values in, so that EL1 reads them (ADR 0030); any
+            // other value would make the core look like another.
+            VmpidrEl2 if value == self.mpidr() => {}
+            VpidrEl2 if value == MIDR => {}
+            VmpidrEl2 | VpidrEl2 => {
+                return Err(Fault::Unsupported("giving EL1 another core's ID registers"));
+            }
+            MpidrEl1 | MidrEl1 | CurrentEl | EsrEl1 | FarEl1 | CtrEl0 | CntvctEl0 => {
                 // Writable on hardware in the case of ESR and FAR, but nothing should.
                 return Err(Fault::SystemRegisterAccess { register, el: self.el, write: true });
             }
@@ -638,15 +656,16 @@ impl Cpu {
         Ok(self.read_sp(rn, Width::W64))
     }
 
-    /// Fetches, decodes and executes one instruction. With `trace`, prints it first.
-    ///
-    /// If the instruction's fetch or one of its data accesses fails translation, the
-    /// CPU takes an abort instead, and the next instruction is the abort handler's.
+    /// Whether interrupts can reach this core. Only core 0's can (ADRs 0016 and 0030).
+    pub fn takes_interrupts(&self) -> bool {
+        self.core == 0
+    }
+
     /// Brings the virtual timer's line up to date, and says whether this core has an
     /// IRQ pending, masked or not. Only core 0 has interrupts (ADRs 0016 and 0030).
     pub fn irq_pending(&mut self, bus: &mut Bus, now: u64) -> bool {
         self.count = now;
-        if self.core != 0 {
+        if !self.takes_interrupts() {
             return false;
         }
         // The virtual timer's interrupt reaches the core through the local
@@ -666,7 +685,7 @@ impl Cpu {
     /// waits for one: its virtual timer's deadline, or the next device interrupt.
     /// None if only input to the UART could raise one (ADRs 0017 and 0018).
     pub fn next_interrupt(&self, bus: &Bus) -> Option<u64> {
-        if self.core != 0 {
+        if !self.takes_interrupts() {
             return None;
         }
         let timer = (self.sys.cntv_ctl_el0 & (CNTV_CTL_ENABLE | CNTV_CTL_IMASK) == CNTV_CTL_ENABLE
@@ -675,6 +694,11 @@ impl Cpu {
         [timer, bus.next_device_interrupt()].into_iter().flatten().min()
     }
 
+    /// Fetches, decodes and executes one instruction, with the counter at `now`. With
+    /// `trace`, prints it first.
+    ///
+    /// If the instruction's fetch or one of its data accesses fails translation, the
+    /// CPU takes an abort instead, and the next instruction is the abort handler's.
     pub fn step(&mut self, bus: &mut Bus, now: u64, trace: bool) -> Result<Step, Fault> {
         self.count = now;
         if self.take_pending_irq(bus) {
@@ -1015,12 +1039,22 @@ impl Cpu {
             // for and there is nothing to invalidate.
             Nop | Isb | Dsb { .. } => {}
             // These are undefined at EL0, as on hardware.
-            IcIallu | TlbiVmalle1 | TlbiAside1 { .. } | TlbiVmalle1is | TlbiAside1is { .. }
+            IcIallu
+            | IcIalluis
+            | TlbiVmalle1
+            | TlbiAside1 { .. }
+            | TlbiVmalle1is
+            | TlbiAside1is { .. }
                 if self.el == 0 =>
             {
                 next = self.take_exception(EC_UNKNOWN, 0, pc)?
             }
-            IcIallu | TlbiVmalle1 | TlbiAside1 { .. } | TlbiVmalle1is | TlbiAside1is { .. } => {}
+            IcIallu
+            | IcIalluis
+            | TlbiVmalle1
+            | TlbiAside1 { .. }
+            | TlbiVmalle1is
+            | TlbiAside1is { .. } => {}
             // Nor are data caches, so there is nothing to clean, but the address must
             // still translate, as on hardware.
             DcCivac { rt } => {
@@ -1384,7 +1418,6 @@ mod tests {
         assert!(cpu.condition_holds(0b1111)); // nv also always holds
     }
 
-    /// Runs `program` from address 0x80000 until it stops.
     /// Runs one instruction on a core of its own, a count after the last, as the
     /// machine in `main` does.
     fn tick(cpu: &mut Cpu, bus: &mut Bus) -> Result<Step, Fault> {
@@ -1393,6 +1426,7 @@ mod tests {
         cpu.step(bus, now, false)
     }
 
+    /// Runs `program` from address 0x80000 until it stops.
     fn run(program: &[u32], steps: usize) -> (Cpu, Bus) {
         let mut bus = Bus::new(uart());
         let bytes: Vec<u8> = program.iter().flat_map(|word| word.to_le_bytes()).collect();

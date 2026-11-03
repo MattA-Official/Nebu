@@ -17,12 +17,15 @@ is this stage). The kernel:
 - writes the physical address of `_start_secondary` into the firmware's spin table,
   at 0xE0, 0xE8 and 0xF0 for cores 1 to 3, cleans those words to RAM with `dc civac`,
   and sends an event with `sev`;
+- on each new core, at EL2, copies `MPIDR_EL1` and `MIDR_EL1` into `VMPIDR_EL2` and
+  `VPIDR_EL2`, which are what EL1 reads them as;
 - on each new core, reads `MPIDR_EL1` for the core's number, drops from EL2 to EL1,
   turns on the MMU, and stores to a flag with `stlrb` (store-release) to say it is
   running. The boot core waits for the flags with `ldarb` (load-acquire) and reads
   the counter, for up to a second;
 - stores the kernel's page table addresses with `stlr` and loads them with `ldar`;
-- forgets mappings on every core with `tlbi vmalle1is` and `tlbi aside1is`;
+- forgets mappings on every core with `tlbi vmalle1is` and `tlbi aside1is`, and
+  empties every core's instruction cache with `ic ialluis`;
 - parks the new cores in `wfe`.
 
 Nebu has one core, which `MPIDR_EL1` says is core 0. It cannot decode `sev`,
@@ -91,8 +94,12 @@ EL2.
 
 ### The new instructions
 
-- **`sev`**, and **`tlbi vmalle1is` and `tlbi aside1is`**, which do nothing more than
-  their single-core forms, since Nebu has no TLB (ADR 0009).
+- **`sev`**, and **`tlbi vmalle1is`, `tlbi aside1is` and `ic ialluis`**, which do
+  nothing more than their single-core forms, since Nebu has no TLB or caches (ADR
+  0009).
+- **`MIDR_EL1`, `VPIDR_EL2` and `VMPIDR_EL2`.** `MIDR_EL1` reads as QEMU's
+  Cortex-A53 r0p4 (0x410FD034). The two EL2 registers always hold the real IDs, so
+  EL2 may write them only with those; any other value halts Nebu.
 - **`ldar`, `ldarh`, `ldarb`, `stlr`, `stlrh` and `stlrb`**, as ordinary loads and
   stores. Nebu runs one instruction at a time and has no caches, so every access is
   already ordered. They must be aligned, as on hardware; a misaligned one halts Nebu.
@@ -109,8 +116,9 @@ EL2.
    every core sleeps.
 5. Only core 0 takes interrupts and has a timer. Another core that enables its timer
    halts Nebu.
-6. Nebu decodes `sev`, `tlbi vmalle1is`, `tlbi aside1is`, and the load-acquire and
-   store-release instructions of every size.
+6. Nebu decodes `sev`, `tlbi vmalle1is`, `tlbi aside1is`, `ic ialluis`, and the
+   load-acquire and store-release instructions of every size, and models `MIDR_EL1`,
+   `VPIDR_EL2` and `VMPIDR_EL2`.
 7. A fault names the core it happened on.
 
 ## Consequences
