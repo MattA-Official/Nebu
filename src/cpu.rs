@@ -813,6 +813,14 @@ impl Cpu {
                 };
                 self.write(rd, width, value);
             }
+            Csneg { width, rd, rn, rm, condition } => {
+                let value = if self.condition_holds(condition) {
+                    self.read(rn, width)
+                } else {
+                    self.read(rm, width).wrapping_neg() & width.mask()
+                };
+                self.write(rd, width, value);
+            }
             CcmpRegister { width, rn, rm, nzcv, condition } => {
                 let operand2 = self.read(rm, width);
                 self.conditional_compare(width, rn, operand2, nzcv, condition);
@@ -1647,6 +1655,17 @@ mod tests {
         assert_eq!(cpu.x[3], 6);
         assert_eq!(cpu.x[4], 3);
         assert_eq!(cpu.flags, Flags { n: false, z: false, c: false, v: false });
+    }
+
+    #[test]
+    fn csneg_negates_when_the_condition_fails() {
+        // movz x8, #5; cmp x8, #5; csneg x9, x8, x8, ne (equal, so -5);
+        // csneg x10, x8, x8, eq (5); csneg w11, w8, w8, ne (-5 in 32 bits)
+        let program = [0xd28000a8, 0xf100151f, 0xda881509, 0xda88050a, 0x5a88150b];
+        let (cpu, _) = run(&program, 5);
+        assert_eq!(cpu.x[9], 5u64.wrapping_neg());
+        assert_eq!(cpu.x[10], 5);
+        assert_eq!(cpu.x[11], 0xFFFF_FFFB);
     }
 
     #[test]

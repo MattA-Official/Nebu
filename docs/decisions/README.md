@@ -32,7 +32,7 @@ works live here.
 | 0016 | [The timer and interrupts](0016-the-timer-and-interrupts.md) | Accepted; amended by 0017 and 0019 |
 | 0017 | [Device interrupts and the system timer](0017-device-interrupts-and-the-system-timer.md) | Accepted; amended by 0018 |
 | 0018 | [The UART's interrupts](0018-the-uarts-interrupts.md) | Accepted; amended by 0019 |
-| 0019 | [The SD card](0019-the-sd-card.md) | Accepted; amended by 0024 |
+| 0019 | [The SD card](0019-the-sd-card.md) | Accepted; amended by 0024 and 0028 |
 | 0020 | [LDRSB (immediate)](0020-ldrsb-immediate.md) | Accepted |
 | 0021 | [Widening multiplies](0021-widening-multiplies.md) | Accepted |
 | 0022 | [Loading a second file into memory](0022-loading-a-second-file.md) | Accepted |
@@ -40,4 +40,6 @@ works live here.
 | 0024 | [The USB controller, a hub and a keyboard](0024-the-usb-controller-and-keyboard.md) | Accepted |
 | 0025 | [Typing on the keyboard](0025-typing-on-the-keyboard.md) | Accepted |
 | 0026 | [STRH (register)](0026-strh-register.md) | Accepted |
+| 0028 | [Writing to the SD card](0028-writing-to-the-sd-card.md) | Proposed |
+| 0029 | [CSNEG](0029-csneg.md) | Proposed |
 | 0030 | [The hardware random number generator](0030-the-random-number-generator.md) | Proposed |
