@@ -404,9 +404,7 @@ impl Bus {
             .collect();
         self.mailbox.answer(&mut message).map_err(BusError::Mailbox)?;
         for (word, value) in (address..).step_by(4).zip(message) {
-            for index in 0..4 {
-                self.ram.write_byte(word + index, (value >> (8 * index)) as u8);
-            }
+            self.ram.write(word, 4, u64::from(value));
         }
         Ok(())
     }

@@ -41,7 +41,8 @@ For what the controller models:
 
 ## Decision
 
-1. `--sd` opens the image for reading and writing. A block is written to the file as
+1. `--sd` opens the image for reading and writing, or for reading only if it may not
+   be written, in which case a write halts Nebu. A block is written to the file as
    soon as its last word reaches DATA.
 2. CMD24 (one block) and CMD25 (several, until CMD12) are accepted in the transfer
    state, for blocks within the card. A write takes the card to the receive-data
@@ -54,7 +55,10 @@ For what the controller models:
 5. CMDTM's multi-block and block-count-enable bits are accepted, only together, and
    only for a write. A command sent before a write's blocks are all written halts
    Nebu, as does writing DATA with no write under way. Resetting the data line
-   abandons a write.
+   abandons a write; a card part way through CMD24's block goes back to the transfer
+   state, and one in the middle of CMD25 still waits for CMD12. BLKSIZECNT's count
+   goes down by one for each of CMD25's blocks, as QEMU's does. A write that would
+   run past the end of the card halts Nebu before any of it is written.
 
 ## Consequences
 

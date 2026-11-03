@@ -362,7 +362,15 @@ impl Emmc {
                 }
                 if value & SRST_DATA != 0 {
                     self.read = None;
-                    self.writing = None;
+                    // A card sent part of one block gives up on it, and is back in
+                    // the transfer state; one in the middle of CMD25 waits for
+                    // CMD12.
+                    if let Some(writing) = self.writing.take()
+                        && !writing.multiple
+                        && let Some(card) = self.card.as_mut()
+                    {
+                        card.state = State::Transfer;
+                    }
                     self.interrupt &= !(DATA_DONE | READ_RDY | WRITE_RDY);
                 }
                 let value = value & !(SRST_CMD | SRST_DATA | CLK_STABLE);
@@ -447,6 +455,11 @@ impl Emmc {
                     return Err("a write of no blocks");
                 }
                 let block = u64::from(self.arg1);
+                // A real card refuses a write that runs past its end before taking
+                // any of it; Nebu halts before writing any of it.
+                if block + u64::from(remaining) > card.blocks {
+                    return Err("a write past the end of the card");
+                }
                 self.writing = Some(Writing { block, remaining, offset: 0, multiple });
                 self.raise(WRITE_RDY);
             }
@@ -475,6 +488,10 @@ impl Emmc {
         writing.block += 1;
         writing.remaining -= 1;
         writing.offset = 0;
+        // The block counter counts down, as QEMU's does.
+        if writing.multiple {
+            self.blksizecnt = u32::from(writing.remaining as u16) << 16 | self.blksizecnt & 0xFFFF;
+        }
         let (last, multiple) = (writing.remaining == 0, writing.multiple);
         let card = self.card.as_mut().ok_or("writing data with no card")?;
         card.write(block, &self.block)?;
@@ -617,6 +634,28 @@ mod tests {
             emmc.write(CMDTM, 24 << 24 | 2 << 16 | DATA_PRESENT, true),
             Err("a write past the end of the card")
         );
+    }
+
+    #[test]
+    fn counts_blocks_down_and_refuses_a_write_that_runs_past_the_end() {
+        let mut emmc = controller("write-count", &[]);
+        select(&mut emmc);
+        emmc.write(BLKSIZECNT, 2 << 16 | 512, true).unwrap();
+        command(&mut emmc, 25 << 24 | 2 << 16 | DATA_PRESENT | MULTI_BLOCK | BLOCK_COUNT_ENABLE, 0);
+        for _ in 0..128 {
+            emmc.write(DATA, 0, true).unwrap();
+        }
+        assert_eq!(emmc.read(BLKSIZECNT).unwrap().unwrap(), 1 << 16 | 512);
+        for _ in 0..128 {
+            emmc.write(DATA, 0, true).unwrap();
+        }
+        assert_eq!(emmc.read(BLKSIZECNT).unwrap().unwrap(), 512);
+        command(&mut emmc, 12 << 24 | 3 << 16, 0);
+        // Two blocks from the last: refused before either is written.
+        emmc.write(BLKSIZECNT, 2 << 16 | 512, true).unwrap();
+        emmc.write(ARG1, (8 << 20) - 1, true).unwrap();
+        let multiple = 25 << 24 | 2 << 16 | DATA_PRESENT | MULTI_BLOCK | BLOCK_COUNT_ENABLE;
+        assert_eq!(emmc.write(CMDTM, multiple, true), Err("a write past the end of the card"));
     }
 
     #[test]
