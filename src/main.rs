@@ -56,7 +56,8 @@ usage: nebu [--semihosting] [--trace] [--sd <card.img>] [--load <file>@<address>
   --keys <list>  plug in the keyboard, and type on it: each time NeOS asks it for a
                  report, the next of these presses (+name) and releases (-name),
                  separated by commas, with QEMU's names for keys, such as
-                 +shift,+h,-h,-shift";
+                 +shift,+h,-h,-shift; ~N holds the keys as they are for the next N
+                 times it asks";
 
 fn main() -> ExitCode {
     let mut semihosting = false;

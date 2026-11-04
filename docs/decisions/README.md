@@ -38,7 +38,8 @@ works live here.
 | 0022 | [Loading a second file into memory](0022-loading-a-second-file.md) | Accepted |
 | 0023 | [The framebuffer](0023-the-framebuffer.md) | Accepted |
 | 0024 | [The USB controller, a hub and a keyboard](0024-the-usb-controller-and-keyboard.md) | Accepted |
-| 0025 | [Typing on the keyboard](0025-typing-on-the-keyboard.md) | Accepted |
+| 0025 | [Typing on the keyboard](0025-typing-on-the-keyboard.md) | Accepted; amended by 0027 |
 | 0026 | [STRH (register)](0026-strh-register.md) | Accepted |
+| 0027 | [Holding keys](0027-holding-keys.md) | Accepted |
 | 0028 | [Writing to the SD card](0028-writing-to-the-sd-card.md) | Proposed |
 | 0029 | [CSNEG](0029-csneg.md) | Proposed |
