@@ -9,6 +9,7 @@ use crate::gpio::Gpio;
 use crate::local::{self, Controller, Local};
 use crate::mailbox::{Mailbox, Request};
 use crate::pl011::Pl011;
+use crate::rng::Rng;
 use crate::system_timer::SystemTimer;
 use crate::usb::{self, Dwc2, Memory};
 
@@ -37,6 +38,8 @@ const EMMC_BASE: u64 = 0x3F30_0000;
 const EMMC_WINDOW: u64 = 0x100;
 /// The DWC2 USB controller (ADR 0024).
 const USB_BASE: u64 = 0x3F98_0000;
+/// The hardware random number generator (ADR 0032).
+const RNG_BASE: u64 = 0x3F10_4000;
 /// The size of the other devices' register windows.
 const DEVICE_WINDOW: u64 = 0x1000;
 
@@ -134,6 +137,7 @@ impl usb::Memory for Ram {
 pub struct Bus {
     ram: Ram,
     gpio: Gpio,
+    rng: Rng,
     uart: Pl011,
     mailbox: Mailbox,
     local: Local,
@@ -163,6 +167,7 @@ impl Bus {
         Bus {
             ram: Ram::default(),
             gpio: Gpio::default(),
+            rng: Rng::default(),
             uart,
             mailbox: Mailbox::default(),
             local: Local::default(),
@@ -207,6 +212,11 @@ impl Bus {
         match device_at(address) {
             Some((device @ "GPIO", offset)) if size == 4 => self
                 .gpio
+                .read(offset)
+                .map(u64::from)
+                .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "random number generator", offset)) if size == 4 => self
+                .rng
                 .read(offset)
                 .map(u64::from)
                 .ok_or(BusError::DeviceRegister { device, offset }),
@@ -267,6 +277,10 @@ impl Bus {
         match device_at(address) {
             Some((device @ "GPIO", offset)) if size == 4 => self
                 .gpio
+                .write(offset, value as u32)
+                .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "random number generator", offset)) if size == 4 => self
+                .rng
                 .write(offset, value as u32)
                 .ok_or(BusError::DeviceRegister { device, offset }),
             Some((device @ "PL011 UART", offset)) if size == 4 => {
@@ -463,6 +477,9 @@ fn device_at(address: u64) -> Option<(&'static str, u64)> {
     }
     if (USB_BASE..USB_BASE + DEVICE_WINDOW).contains(&address) {
         return Some(("USB", address - USB_BASE));
+    }
+    if (RNG_BASE..RNG_BASE + DEVICE_WINDOW).contains(&address) {
+        return Some(("random number generator", address - RNG_BASE));
     }
     if (UART0_BASE..UART0_BASE + DEVICE_WINDOW).contains(&address) {
         return Some(("PL011 UART", address - UART0_BASE));

@@ -90,6 +90,12 @@ pub enum Extend {
 pub enum SystemRegister {
     /// The multiprocessor affinity register: which core this is.
     MpidrEl1,
+    /// The main ID register: which CPU this is (ADR 0030).
+    MidrEl1,
+    /// What MIDR_EL1 reads as at EL1 (ADR 0030).
+    VpidrEl2,
+    /// What MPIDR_EL1 reads as at EL1 (ADR 0030).
+    VmpidrEl2,
     /// The current exception level.
     CurrentEl,
     /// EL1's system control register: the MMU, caches and alignment checks.
@@ -153,6 +159,9 @@ impl SystemRegister {
     fn from_encoding(op0: u8, op1: u8, crn: u8, crm: u8, op2: u8) -> Option<Self> {
         Some(match (op0, op1, crn, crm, op2) {
             (3, 0, 0, 0, 5) => SystemRegister::MpidrEl1,
+            (3, 0, 0, 0, 0) => SystemRegister::MidrEl1,
+            (3, 4, 0, 0, 0) => SystemRegister::VpidrEl2,
+            (3, 4, 0, 0, 5) => SystemRegister::VmpidrEl2,
             (3, 0, 4, 2, 2) => SystemRegister::CurrentEl,
             (3, 0, 1, 0, 0) => SystemRegister::SctlrEl1,
             (3, 0, 4, 0, 0) => SystemRegister::SpsrEl1,
@@ -188,6 +197,9 @@ impl SystemRegister {
     pub fn name(self) -> &'static str {
         match self {
             SystemRegister::MpidrEl1 => "MPIDR_EL1",
+            SystemRegister::MidrEl1 => "MIDR_EL1",
+            SystemRegister::VpidrEl2 => "VPIDR_EL2",
+            SystemRegister::VmpidrEl2 => "VMPIDR_EL2",
             SystemRegister::CurrentEl => "CurrentEL",
             SystemRegister::SctlrEl1 => "SCTLR_EL1",
             SystemRegister::SpsrEl1 => "SPSR_EL1",
@@ -395,6 +407,8 @@ pub enum Instruction {
     Dsb { option: u8 },
     /// IC IALLU: invalidate the whole instruction cache.
     IcIallu,
+    /// IC IALLUIS: IC IALLU on every core (ADR 0030).
+    IcIalluis,
     /// DC CIVAC: clean and invalidate the data cache line holding the address in
     /// `rt`, to the point of coherency.
     DcCivac { rt: u8 },
@@ -402,6 +416,18 @@ pub enum Instruction {
     TlbiVmalle1,
     /// TLBI ASIDE1: invalidate the TLB entries for the ASID in bits 63 to 48 of `rt`.
     TlbiAside1 { rt: u8 },
+    /// TLBI VMALLE1IS: TLBI VMALLE1 on every core (ADR 0030).
+    TlbiVmalle1is,
+    /// TLBI ASIDE1IS: TLBI ASIDE1 on every core (ADR 0030).
+    TlbiAside1is { rt: u8 },
+    /// SEV: send an event to every core (ADR 0030).
+    Sev,
+    /// LDAR, LDARH, LDARB: load `bytes` bytes from the address in `rn` with acquire
+    /// ordering, zero-extended into `rt` (ADR 0030).
+    Ldar { bytes: u8, rt: u8, rn: u8 },
+    /// STLR, STLRH, STLRB: store the low `bytes` bytes of `rt` to the address in `rn`
+    /// with release ordering (ADR 0030).
+    Stlr { bytes: u8, rt: u8, rn: u8 },
     /// MRS: read a system register into `rt`. 31 is the zero register.
     Mrs { rt: u8, register: SystemRegister },
     /// MSR (register): write `rt` to a system register. 31 is the zero register.
@@ -761,6 +787,7 @@ fn system(word: u32) -> Result<Instruction, DecodeError> {
             (0, 0) => Ok(Instruction::Nop),
             (0, 2) => Ok(Instruction::Wfe),
             (0, 3) => Ok(Instruction::Wfi),
+            (0, 4) => Ok(Instruction::Sev),
             _ => Err(DecodeError::Unimplemented),
         },
         // Barriers.
@@ -774,8 +801,11 @@ fn system(word: u32) -> Result<Instruction, DecodeError> {
         // SYS: cache and TLB maintenance and address translation.
         (0, 1, _, _) => match (op1, crn, crm, op2, rt) {
             (0, 7, 5, 0, 31) => Ok(Instruction::IcIallu),
+            (0, 7, 1, 0, 31) => Ok(Instruction::IcIalluis),
             (0, 8, 7, 0, 31) => Ok(Instruction::TlbiVmalle1),
             (0, 8, 7, 2, rt) => Ok(Instruction::TlbiAside1 { rt }),
+            (0, 8, 3, 0, 31) => Ok(Instruction::TlbiVmalle1is),
+            (0, 8, 3, 2, rt) => Ok(Instruction::TlbiAside1is { rt }),
             (3, 7, 14, 1, rt) => Ok(Instruction::DcCivac { rt }),
             _ => Err(DecodeError::Unimplemented),
         },
@@ -799,6 +829,16 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
     }
     let rt = reg(word, 0);
     let rn = reg(word, 5);
+
+    // Load-acquire and store-release: size 001000 1 L 0 11111 1 11111 Rn Rt.
+    if word & 0x3FBF_FC00 == 0x089F_FC00 {
+        let bytes = 1 << bits(word, 31, 30);
+        return Ok(if bits(word, 22, 22) == 1 {
+            Instruction::Ldar { bytes, rt, rn }
+        } else {
+            Instruction::Stlr { bytes, rt, rn }
+        });
+    }
 
     // Load register (literal).
     if bits(word, 29, 27) == 0b011 && bits(word, 25, 24) == 0b00 {
@@ -1544,9 +1584,26 @@ impl fmt::Display for Instruction {
                 name => write!(f, "dsb {name}"),
             },
             IcIallu => write!(f, "ic iallu"),
+            IcIalluis => write!(f, "ic ialluis"),
             DcCivac { rt } => write!(f, "dc civac, {}", zr(rt, Width::W64)),
             TlbiVmalle1 => write!(f, "tlbi vmalle1"),
             TlbiAside1 { rt } => write!(f, "tlbi aside1, {}", zr(rt, Width::W64)),
+            TlbiVmalle1is => write!(f, "tlbi vmalle1is"),
+            TlbiAside1is { rt } => write!(f, "tlbi aside1is, {}", zr(rt, Width::W64)),
+            Sev => write!(f, "sev"),
+            Ldar { bytes, rt, rn } | Stlr { bytes, rt, rn } => {
+                let load = matches!(self, Ldar { .. });
+                let mnemonic = match (load, bytes) {
+                    (true, 1) => "ldarb",
+                    (true, 2) => "ldarh",
+                    (true, _) => "ldar",
+                    (false, 1) => "stlrb",
+                    (false, 2) => "stlrh",
+                    (false, _) => "stlr",
+                };
+                let width = if bytes == 8 { Width::W64 } else { Width::W32 };
+                write!(f, "{mnemonic} {}, [{}]", zr(rt, width), sp(rn, Width::W64))
+            }
             Mrs { rt, register } => write!(f, "mrs {}, {}", zr(rt, Width::W64), register.name()),
             Msr { register, rt } => write!(f, "msr {}, {}", register.name(), zr(rt, Width::W64)),
             LdrLiteral { width, rt, offset } => {
@@ -2039,7 +2096,15 @@ mod tests {
         assert_eq!(decode(0xd50b7520), Err(DecodeError::Unimplemented)); // ic ivau, x0
         assert_eq!(decode(0x9acb2949), Err(DecodeError::Unimplemented)); // asrv x9, x10, x11
         assert_eq!(decode(0x9acb2d49), Err(DecodeError::Unimplemented)); // rorv x9, x10, x11
-        assert_eq!(decode(0xd503209f), Err(DecodeError::Unimplemented)); // sev
+        assert_eq!(decode(0xd503209f).unwrap().to_string(), "sev");
+        assert_eq!(decode(0xd508711f).unwrap().to_string(), "ic ialluis");
+        assert_eq!(decode(0xd53c00a1).unwrap().to_string(), "mrs x1, VMPIDR_EL2");
+        assert_eq!(decode(0xc89ffd60).unwrap().to_string(), "stlr x0, [x11]");
+        assert_eq!(decode(0x08dffc20).unwrap().to_string(), "ldarb w0, [x1]");
+        assert_eq!(decode(0x089ffc20).unwrap().to_string(), "stlrb w0, [x1]");
+        assert_eq!(decode(0xc8dffc20).unwrap().to_string(), "ldar x0, [x1]");
+        assert_eq!(decode(0xd508831f).unwrap().to_string(), "tlbi vmalle1is");
+        assert_eq!(decode(0xd5088348).unwrap().to_string(), "tlbi aside1is, x8");
         assert_eq!(decode(0x1e202008), Err(DecodeError::Unimplemented)); // fcmp s0, s0
         assert_eq!(
             decode(0xd53bd060), // mrs x0, TPIDRRO_EL0

@@ -1,6 +1,6 @@
 # 0027. Holding keys
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-03
 - **Amends:** [0025](0025-typing-on-the-keyboard.md), decisions 1 and 2
 
