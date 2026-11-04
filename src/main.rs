@@ -42,7 +42,8 @@ usage: nebu [--semihosting] [--trace] [--sd <card.img>] [--load <file>@<address>
   --semihosting  let `hlt #0xf000` make semihosting calls, as QEMU's -semihosting does
   --trace        print every instruction to standard error before running it
   --sd <file>    put an SD card holding <file> in the slot; it must be a whole
-                 number of 512 KiB, from 2 GiB to 32 GiB, and is only ever read
+                 number of 512 KiB, from 2 GiB to 32 GiB, and blocks written to
+                 the card are written to <file>
   --load <file>@<address>
                  copy <file> into memory at <address> (hexadecimal, with 0x)
                  before starting, as the firmware does with config.txt's
@@ -202,9 +203,16 @@ fn parse_load(argument: &str) -> Option<(String, u64)> {
     (!path.is_empty()).then(|| (path.to_string(), address))
 }
 
-/// Opens the SD card image at `path`, for reading only.
+/// Opens the SD card image at `path`, for reading and writing (ADR 0028).
 fn open_card(path: &str) -> Result<Card, String> {
-    let file = fs::File::open(path).map_err(|error| format!("cannot read {path}: {error}"))?;
+    // An image that may only be read still serves a kernel that only reads; a write
+    // to it halts (ADR 0028).
+    let file = fs::File::options()
+        .read(true)
+        .write(true)
+        .open(path)
+        .or_else(|_| fs::File::open(path))
+        .map_err(|error| format!("cannot open {path}: {error}"))?;
     Card::new(file).map_err(|error| format!("{path}: {error}"))
 }
 

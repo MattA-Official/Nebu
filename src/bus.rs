@@ -2,7 +2,6 @@
 //!
 //! Every address Nebu does not model is an error, never silently ignored (ADR 0001).
 
-use std::collections::HashMap;
 use std::fmt;
 
 use crate::emmc::Emmc;
@@ -80,24 +79,54 @@ impl fmt::Display for BusError {
     }
 }
 
-/// Sparse RAM: pages that have never been written read as zero.
-#[derive(Default)]
+/// Sparse RAM: pages that have never been written read as zero. Every page has a
+/// place in `pages`, found by its number, since a look-up happens for every
+/// instruction fetched and every access to memory.
 struct Ram {
-    pages: HashMap<u64, Box<[u8]>>,
+    pages: Vec<Option<Box<[u8]>>>,
+}
+
+impl Default for Ram {
+    fn default() -> Ram {
+        Ram { pages: (0..RAM_END / PAGE_SIZE).map(|_| None).collect() }
+    }
+}
+
+impl Ram {
+    /// Reads `size` bytes (1, 2, 4 or 8) at `address`, a multiple of `size` below
+    /// [`RAM_END`], little-endian. Such a read never crosses into another page.
+    fn read(&self, address: u64, size: u64) -> u64 {
+        let Some(page) = &self.pages[(address / PAGE_SIZE) as usize] else {
+            return 0;
+        };
+        let offset = (address % PAGE_SIZE) as usize;
+        let mut bytes = [0; 8];
+        bytes[..size as usize].copy_from_slice(&page[offset..offset + size as usize]);
+        u64::from_le_bytes(bytes)
+    }
+
+    /// Writes the low `size` bytes (1, 2, 4 or 8) of `value` at `address`, a
+    /// multiple of `size` below [`RAM_END`], little-endian.
+    fn write(&mut self, address: u64, size: u64, value: u64) {
+        let offset = (address % PAGE_SIZE) as usize;
+        let page = self.page(address);
+        page[offset..offset + size as usize].copy_from_slice(&value.to_le_bytes()[..size as usize]);
+    }
+
+    /// The page that holds `address`, made the first time it is written.
+    fn page(&mut self, address: u64) -> &mut [u8] {
+        self.pages[(address / PAGE_SIZE) as usize]
+            .get_or_insert_with(|| vec![0; PAGE_SIZE as usize].into_boxed_slice())
+    }
 }
 
 impl usb::Memory for Ram {
     fn read_byte(&self, address: u64) -> u8 {
-        let page = address / PAGE_SIZE;
-        let offset = (address % PAGE_SIZE) as usize;
-        self.pages.get(&page).map_or(0, |bytes| bytes[offset])
+        self.read(address, 1) as u8
     }
 
     fn write_byte(&mut self, address: u64, value: u8) {
-        let page = address / PAGE_SIZE;
-        let offset = (address % PAGE_SIZE) as usize;
-        self.pages.entry(page).or_insert_with(|| vec![0; PAGE_SIZE as usize].into_boxed_slice())
-            [offset] = value;
+        self.write(address, 1, u64::from(value));
     }
 }
 
@@ -232,9 +261,7 @@ impl Bus {
             return Err(BusError::Unaligned);
         }
         if address < RAM_END {
-            for (index, address) in (address..address + size).enumerate() {
-                self.ram.write_byte(address, (value >> (8 * index)) as u8);
-            }
+            self.ram.write(address, size, value);
             return Ok(());
         }
         match device_at(address) {
@@ -377,9 +404,7 @@ impl Bus {
             .collect();
         self.mailbox.answer(&mut message).map_err(BusError::Mailbox)?;
         for (word, value) in (address..).step_by(4).zip(message) {
-            for index in 0..4 {
-                self.ram.write_byte(word + index, (value >> (8 * index)) as u8);
-            }
+            self.ram.write(word, 4, u64::from(value));
         }
         Ok(())
     }
@@ -410,9 +435,7 @@ impl Bus {
     }
 
     fn read_ram(&self, address: u64, size: u64) -> u64 {
-        (0..size).fold(0, |value, index| {
-            value | u64::from(self.ram.read_byte(address + index)) << (8 * index)
-        })
+        self.ram.read(address, size)
     }
 }
 
