@@ -1,6 +1,6 @@
 # 0032. The hardware random number generator
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-03
 
 ## Context

@@ -43,4 +43,4 @@ works live here.
 | 0027 | [Holding keys](0027-holding-keys.md) | Accepted |
 | 0028 | [Writing to the SD card](0028-writing-to-the-sd-card.md) | Accepted |
 | 0029 | [CSNEG](0029-csneg.md) | Accepted |
-| 0032 | [The hardware random number generator](0032-the-random-number-generator.md) | Proposed |
+| 0032 | [The hardware random number generator](0032-the-random-number-generator.md) | Accepted |
