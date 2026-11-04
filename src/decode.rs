@@ -349,6 +349,8 @@ pub enum Instruction {
     Csinc { width: Width, rd: u8, rn: u8, rm: u8, condition: u8 },
     /// CSINV: `rd = if condition holds { rn } else { !rm }`. 31 is the zero register.
     Csinv { width: Width, rd: u8, rn: u8, rm: u8, condition: u8 },
+    /// CSNEG: `rd = if condition holds { rn } else { -rm }`. 31 is the zero register.
+    Csneg { width: Width, rd: u8, rn: u8, rm: u8, condition: u8 },
     /// CCMP (register): if `condition` holds, set the flags as `cmp rn, rm` would;
     /// otherwise set them to `nzcv`. 31 is the zero register.
     CcmpRegister { width: Width, rn: u8, rm: u8, nzcv: u8, condition: u8 },
@@ -1160,7 +1162,8 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
             (0, 0b00) => Ok(Instruction::Csel { width, rd, rn, rm, condition }),
             (0, 0b01) => Ok(Instruction::Csinc { width, rd, rn, rm, condition }),
             (1, 0b00) => Ok(Instruction::Csinv { width, rd, rn, rm, condition }),
-            _ => Err(DecodeError::Unimplemented), // CSNEG
+            (1, 0b01) => Ok(Instruction::Csneg { width, rd, rn, rm, condition }),
+            _ => Err(DecodeError::Unallocated),
         };
     }
 
@@ -1507,6 +1510,14 @@ impl fmt::Display for Instruction {
             Csinv { width, rd, rn, rm, condition } => write!(
                 f,
                 "csinv {}, {}, {}, {}",
+                zr(rd, width),
+                zr(rn, width),
+                zr(rm, width),
+                CONDITIONS[usize::from(condition)]
+            ),
+            Csneg { width, rd, rn, rm, condition } => write!(
+                f,
+                "csneg {}, {}, {}, {}",
                 zr(rd, width),
                 zr(rn, width),
                 zr(rm, width),
@@ -1905,6 +1916,8 @@ mod tests {
             (0xf24006bf, AndsImmediate { width: W64, rd: 31, rn: 21, imm: 3 }),
             (0x9a9f0604, Csinc { width: W64, rd: 4, rn: 16, rm: 31, condition: 0 }),
             (0x5a9f3100, Csinv { width: W32, rd: 0, rn: 8, rm: 31, condition: 3 }),
+            // csneg x8, x8, x8, eq, as `cneg x8, x8, ne`.
+            (0xda880508, Csneg { width: W64, rd: 8, rn: 8, rm: 8, condition: 0 }),
             (
                 0xab0c03a8,
                 AddsShiftedRegister {
@@ -2074,6 +2087,7 @@ mod tests {
         assert_eq!(decode(0xfa4008a4).unwrap().to_string(), "ccmp x5, #0x0, #0x4, eq");
         assert_eq!(decode(0xb829690a).unwrap().to_string(), "str w10, [x8, x9, lsl #0]");
         assert_eq!(decode(0xd503207f).unwrap().to_string(), "wfi");
+        assert_eq!(decode(0x5a8b350a).unwrap().to_string(), "csneg w10, w8, w11, lo");
     }
 
     #[test]
@@ -2081,7 +2095,7 @@ mod tests {
         assert_eq!(decode(0xca220020), Err(DecodeError::Unimplemented)); // eon x0, x1, x2
         assert_eq!(decode(0xd50b7520), Err(DecodeError::Unimplemented)); // ic ivau, x0
         assert_eq!(decode(0x9acb2949), Err(DecodeError::Unimplemented)); // asrv x9, x10, x11
-        assert_eq!(decode(0x5a8b350a), Err(DecodeError::Unimplemented)); // csneg w10, w8, w11, lo
+        assert_eq!(decode(0x9acb2d49), Err(DecodeError::Unimplemented)); // rorv x9, x10, x11
         assert_eq!(decode(0xd503209f).unwrap().to_string(), "sev");
         assert_eq!(decode(0xd508711f).unwrap().to_string(), "ic ialluis");
         assert_eq!(decode(0xd53c00a1).unwrap().to_string(), "mrs x1, VMPIDR_EL2");

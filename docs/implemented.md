@@ -40,6 +40,7 @@ all addressing modes.
 | CSEL                         | NeOS stage 1: fault reports  |
 | CSINC                        | NeOS stage 2: MMU            |
 | CSINV                        | NeOS stage 4: capability test |
+| CSNEG                        | NeOS: writing files ([ADR 0029](decisions/0029-csneg.md)) |
 | DC CIVAC                     | NeOS stage 4: asking the firmware about memory |
 | DSB                          | NeOS step 3: starting the kernel |
 | EOR (immediate)              | NeOS stage 2: MMU            |
@@ -121,7 +122,7 @@ and `lsr` with a register shift amount are LSLV and LSRV, `cset` and `cinc` are
 CSINC, `mvn` is ORN, `neg` is SUB (shifted register), `mul` is MADD, `smull`,
 `umull`, `smnegl` and `umnegl` are SMADDL, UMADDL, SMSUBL and UMSUBL, `cmn` with a
 register is ADDS (shifted register), `ngc` and `ngcs` are SBC and SBCS, `ror` with an immediate is EXTR,
-`csetm` is CSINV, and `cmp` with an extended register is SUBS (extended register).
+`csetm` is CSINV, `cneg` is CSNEG, and `cmp` with an extended register is SUBS (extended register).
 LDURB and STURB run as LDRB and STRB with an unscaled offset
 ([ADR 0010](decisions/0010-el0-and-system-calls.md)), LDUR as LDR
 ([ADR 0012](decisions/0012-instructions-for-capabilities.md)), and LDURH and STURH
@@ -201,11 +202,12 @@ the tables ([ADR 0009](decisions/0009-the-mmu.md)).
 | PL011 UART        | IFLS (read and write), RIS and MIS (read); the receive and transmit interrupts, as QEMU raises them; IMSC accepts only them and the receive timeout ([ADR 0018](decisions/0018-the-uarts-interrupts.md)) | NeOS stage 7: the serial driver |
 | GPIO              | GPFSEL1, GPPUD, GPPUDCLK0 (read and write)        | NeOS step 3: routing the UART to the pins |
 | GPIO              | GPFSEL3, GPFSEL4, GPFSEL5, GPPUDCLK1 (read and write); the card answers only while pins 48 to 53 are all alternate function 3 ([ADR 0019](decisions/0019-the-sd-card.md)) | The SD card driver: switching the card's pins and their pull-ups |
-| EMMC controller   | At 0x3F30_0000: BLKSIZECNT, ARG1, CONTROL1, INTERRUPT (write 1 to clear), IRPT_MASK, IRPT_EN (read and write); CMDTM (write: runs the command at once); RESP0 to RESP3, DATA, STATUS (read); interrupt 62. The card: CMD0, 2, 3, 7, 8, 9, 17 and 55, and ACMD41, on a high-capacity image read with `--sd` ([ADR 0019](decisions/0019-the-sd-card.md)) | The SD card driver |
+| EMMC controller   | At 0x3F30_0000: BLKSIZECNT, ARG1, CONTROL1, INTERRUPT (write 1 to clear), IRPT_MASK, IRPT_EN (read and write); CMDTM (write: runs the command at once); RESP0 to RESP3, DATA, STATUS (read); interrupt 62. DATA (write) for writes; CMDTM's multi-block and block-count bits, together and only to write. The card: CMD0, 2, 3, 7, 8, 9, 12, 13, 17, 24, 25 and 55, and ACMD41, on a high-capacity image read and written with `--sd` ([ADRs 0019](decisions/0019-the-sd-card.md) and [0028](decisions/0028-writing-to-the-sd-card.md)) | The SD card driver |
 | Mailbox           | Mailbox 0's READ and STATUS, mailbox 1's WRITE and STATUS (never full); channel 8 with the GET_ARM_MEMORY tag only ([ADR 0011](decisions/0011-the-firmware-mailbox.md)) | NeOS stage 4: how much memory there is |
 | Interrupt controller | DISABLE_IRQS_1, DISABLE_IRQS_2, DISABLE_BASIC_IRQS (write) at 0x3F00_B21C to 0x3F00_B224 | NeOS stage 6a: turning off what is not used |
 | Interrupt controller | IRQ_PENDING_1 and 2 (read: raised interrupts), FIQ control (write 0 only), ENABLE_IRQS_1 (write: interrupts 1 and 3 only) and ENABLE_IRQS_2 (write: interrupts 57, the UART's, and 62, the EMMC controller's, only) ([ADRs 0017](decisions/0017-device-interrupts-and-the-system-timer.md) and [0018](decisions/0018-the-uarts-interrupts.md)) | NeOS stages 6b and 7: drivers' interrupts |
 | Local peripherals | At 0x4000_0000: the GPU routing, the local timer's control and core 0's mailbox interrupt control (write 0 only); core 0's timer interrupt control (0 or the virtual timer); core 0's IRQ source (read: the virtual timer and the BCM2835 line) ([ADRs 0016](decisions/0016-the-timer-and-interrupts.md) and [0017](decisions/0017-device-interrupts-and-the-system-timer.md)) | NeOS stages 6a and 6b: interrupts |
+| Random numbers    | At 0x3F10_4000: RNG_CTRL and RNG_INT_MASK (read and write), RNG_STATUS (the warm-up count written back, with one word always waiting), RNG_DATA (read: SplitMix64 words seeded from the host's clock) ([ADR 0032](decisions/0032-the-random-number-generator.md)) | The random service |
 | System timer      | At 0x3F00_3000: CS (read; write 1 to clear), CLO and CHI (read), C0 to C3 (read and write); 1 MHz, from the core's counter ([ADR 0017](decisions/0017-device-interrupts-and-the-system-timer.md)) | NeOS stage 6b: the interrupt test |
 
 ## Semihosting
