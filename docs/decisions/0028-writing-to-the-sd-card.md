@@ -1,6 +1,6 @@
 # 0028. Writing to the SD card
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-03
 - **Amends:** [0019](0019-the-sd-card.md), which said the card is only ever read
 

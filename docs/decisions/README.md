@@ -41,5 +41,5 @@ works live here.
 | 0025 | [Typing on the keyboard](0025-typing-on-the-keyboard.md) | Accepted; amended by 0027 |
 | 0026 | [STRH (register)](0026-strh-register.md) | Accepted |
 | 0027 | [Holding keys](0027-holding-keys.md) | Accepted |
-| 0028 | [Writing to the SD card](0028-writing-to-the-sd-card.md) | Proposed |
-| 0029 | [CSNEG](0029-csneg.md) | Proposed |
+| 0028 | [Writing to the SD card](0028-writing-to-the-sd-card.md) | Accepted |
+| 0029 | [CSNEG](0029-csneg.md) | Accepted |
