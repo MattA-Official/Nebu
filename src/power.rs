@@ -2,8 +2,10 @@
 //!
 //! Writing a count to `WDOG` and "full reset" to `RSTC` arms the watchdog; when the
 //! count runs out, the whole machine resets. Rewriting `WDOG` while it is armed starts
-//! the count again, and clearing `RSTC`'s configuration disarms it. Every write
-//! carries the password 0x5A in its top byte.
+//! the count again, writing "full reset" to `RSTC` again does not, and clearing
+//! `RSTC`'s configuration disarms it. Every write carries the password 0x5A in its top
+//! byte. Reading `WDOG`, which on the chip gives the ticks left, is not modelled, as
+//! NeOS does not do it, so it halts Nebu.
 //!
 //! Register offsets and values are the ones Linux's `bcm2835_wdt` driver uses.
 
@@ -64,7 +66,6 @@ impl Power {
         match offset {
             RSTC => Some(self.rstc),
             RSTS => Some(self.rsts),
-            WDOG => Some(self.wdog),
             _ => None,
         }
     }
@@ -78,6 +79,7 @@ impl Power {
             return Err(Refusal::Password);
         }
         let value = value & !PASSWORD_MASK;
+        let was_armed = self.armed();
         match offset {
             RSTC => {
                 if !matches!(value & WRCFG_MASK, 0 | WRCFG_FULL_RESET) {
@@ -87,9 +89,19 @@ impl Power {
             }
             _ => self.wdog = value & TIME_MASK,
         }
-        self.deadline = (self.rstc & WRCFG_MASK == WRCFG_FULL_RESET && self.wdog != 0)
-            .then(|| now + u64::from(self.wdog) * COUNTS_PER_TICK);
+        // The count starts when the watchdog is armed, or when it is rewritten; arming
+        // it again while it is armed leaves the count running.
+        if !self.armed() {
+            self.deadline = None;
+        } else if offset == WDOG || !was_armed {
+            self.deadline = Some(now + u64::from(self.wdog) * COUNTS_PER_TICK);
+        }
         Ok(())
+    }
+
+    /// Whether a count that runs out resets the machine.
+    fn armed(&self) -> bool {
+        self.rstc & WRCFG_MASK == WRCFG_FULL_RESET && self.wdog != 0
     }
 
     /// The counter at which the watchdog resets the machine, if it is armed.
@@ -113,7 +125,10 @@ mod tests {
         assert_eq!(power.deadline(), Some(100 + 10 * COUNTS_PER_TICK));
         power.write(WDOG, PASSWORD | 20, 500).unwrap();
         assert_eq!(power.deadline(), Some(500 + 20 * COUNTS_PER_TICK));
-        assert_eq!(power.read(WDOG), Some(20));
+        // Arming it again while it is armed leaves the count running.
+        power.write(RSTC, ARM, 900).unwrap();
+        assert_eq!(power.deadline(), Some(500 + 20 * COUNTS_PER_TICK));
+        assert_eq!(power.read(WDOG), None);
     }
 
     #[test]

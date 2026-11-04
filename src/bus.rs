@@ -13,6 +13,7 @@ use crate::power::{self, Power};
 use crate::rng::Rng;
 use crate::system_timer::SystemTimer;
 use crate::usb::{self, Dwc2, Memory};
+use crate::usb_devices::Key;
 
 /// RAM occupies the bottom of the address space, up to the peripherals.
 pub const RAM_END: u64 = 0x3F00_0000;
@@ -199,9 +200,10 @@ impl Bus {
 
     /// The UART and the SD card, to be put in the machine again when it resets
     /// (ADR 0036): the UART keeps its output and input, and the card what was
-    /// written to it.
-    pub fn into_kept(self) -> (Pl011, Option<Card>) {
-        (self.uart.reset(), self.emmc.into_card())
+    /// written to it. A keyboard stays plugged in too, with the keys still to be
+    /// typed on it.
+    pub fn into_kept(self) -> (Pl011, Option<Card>, Option<Vec<Key>>) {
+        (self.uart.reset(), self.emmc.into_card(), self.usb.into_keyboard())
     }
 
     /// The counter at which the watchdog resets the machine, if it is armed (ADR

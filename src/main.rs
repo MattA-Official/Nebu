@@ -138,10 +138,10 @@ fn main() -> ExitCode {
     };
     // What the firmware loads: the kernel, and every `--load` file. They are kept,
     // so that a reset can load them again (ADR 0036).
-    let mut loaded = vec![(LOAD_ADDRESS, bytes)];
+    let mut loaded = vec![(image.clone(), LOAD_ADDRESS, bytes)];
     for (path, address) in loads {
         match fs::read(&path) {
-            Ok(bytes) => loaded.push((address, bytes)),
+            Ok(bytes) => loaded.push((path, address, bytes)),
             Err(error) => {
                 eprintln!("nebu: cannot load {path} at {address:#x}: {error}");
                 return ExitCode::from(2);
@@ -149,7 +149,7 @@ fn main() -> ExitCode {
         }
     }
     let uart = Pl011::new(Box::new(std::io::stdout()), read_stdin());
-    let bus = Bus::with_devices(uart, Emmc::new(card), Dwc2::new(keyboard.clone()));
+    let bus = Bus::with_devices(uart, Emmc::new(card), Dwc2::new(keyboard));
     let mut bus = match power_on(bus, &loaded) {
         Ok(bus) => bus,
         Err(error) => {
@@ -170,8 +170,8 @@ fn main() -> ExitCode {
             // The watchdog resets the whole machine: it starts again as from
             // power-on, with only the SD card and the serial line as they were (ADR
             // 0036).
-            let (uart, card) = bus.into_kept();
-            let fresh = Bus::with_devices(uart, Emmc::new(card), Dwc2::new(keyboard.clone()));
+            let (uart, card, keys) = bus.into_kept();
+            let fresh = Bus::with_devices(uart, Emmc::new(card), Dwc2::new(keys));
             bus = match power_on(fresh.after_watchdog(), &loaded) {
                 Ok(bus) => bus,
                 Err(error) => {
@@ -261,13 +261,12 @@ fn main() -> ExitCode {
     }
 }
 
-/// Loads `loaded`, pairs of an address and the bytes to put there, into the
+/// Loads `loaded`, each a file's name, an address and the file's bytes, into the
 /// machine's RAM, as the firmware does at power-on and after a reset.
-fn power_on(mut bus: Bus, loaded: &[(u64, Vec<u8>)]) -> Result<Bus, String> {
-    for (address, bytes) in loaded {
-        bus.load(*address, bytes).map_err(|error| {
-            format!("cannot load {} bytes at {address:#x}: {error}", bytes.len())
-        })?;
+fn power_on(mut bus: Bus, loaded: &[(String, u64, Vec<u8>)]) -> Result<Bus, String> {
+    for (path, address, bytes) in loaded {
+        bus.load(*address, bytes)
+            .map_err(|error| format!("cannot load {path} at {address:#x}: {error}"))?;
     }
     Ok(bus)
 }

@@ -67,16 +67,21 @@ today NeOS's update service, and every restart, would stop it.
 ## Decision
 
 1. **A new `power` module** models the power manager at 0x3F10_0000, with a 4 KiB
-   window, holding `RSTC`, `RSTS` and `WDOG`. Reads return what was last written (with
-   the password removed); `RSTS` reads as 0x1000 after a power-on and 0x1020 after a
+   window, holding `RSTC`, `RSTS` and `WDOG`. `RSTC` reads as last written (with the
+   password removed). Reading `WDOG`, which on the chip gives the ticks left, halts
+   Nebu, as NeOS does not do it. `RSTS` reads as 0x1000 after a power-on and 0x1020 after a
    watchdog reset, as QEMU's power-on value and the hardware's "had a watchdog reset"
    bit.
-2. **Arming**: a write to `RSTC` whose bits 5:4 are 0b10, or a write to `WDOG` while
-   armed, sets the deadline to now plus the count times 954. A write of bits 5:4 = 0
+2. **Arming**: a write to `RSTC` whose bits 5:4 are 0b10 while disarmed, or a write
+   to `WDOG` while armed, sets the deadline to now plus the count times 954. Writing
+   0b10 again while armed leaves the deadline where it was. A write of bits 5:4 = 0
    disarms it. A count of 0 never resets.
 3. **The reset**: when the counter reaches the deadline, Nebu prints nothing, clears
    RAM, loads the image and the `--load` files again, makes every core and device new
-   except the SD card, and goes on from counter 0. The machine's main loop, when every
+   except the SD card, and goes on from counter 0. What stays outside the chip stays
+   as it was: the card, the serial line (bytes that had already reached the UART
+   before the reset are lost, as on the chip; later ones arrive as usual), and a `--keys` keyboard,
+   which carries on with the keys not yet typed rather than typing them all again. The machine's main loop, when every
    core waits, skips to the watchdog's deadline as it does to a timer interrupt.
 4. **Tests** check that a write without the password halts, that arming and writing
    `WDOG` again moves the deadline, that disarming clears it, and that `RSTS` says
