@@ -1,6 +1,6 @@
 # 0030. Four cores
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-03
 - **Amends:** [0006](0006-machine-model.md) (one core), [0016](0016-the-timer-and-interrupts.md)
   (one count for each instruction) and [0017](0017-device-interrupts-and-the-system-timer.md)
