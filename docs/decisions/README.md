@@ -45,3 +45,4 @@ works live here.
 | 0029 | [CSNEG](0029-csneg.md) | Accepted |
 | 0030 | [Four cores](0030-four-cores.md) | Accepted |
 | 0032 | [The hardware random number generator](0032-the-random-number-generator.md) | Accepted |
+| 0036 | [The watchdog, and restarting the machine](0036-the-watchdog-and-restarting.md) | Proposed |
