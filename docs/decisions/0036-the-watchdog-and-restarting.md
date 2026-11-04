@@ -79,8 +79,9 @@ today NeOS's update service, and every restart, would stop it.
    except the SD card, and goes on from counter 0. The machine's main loop, when every
    core waits, skips to the watchdog's deadline as it does to a timer interrupt.
 4. **Tests** check that a write without the password halts, that arming and writing
-   `WDOG` again moves the deadline, that disarming clears it, and that a reset loads
-   the image again and keeps what was written to the card.
+   `WDOG` again moves the deadline, that disarming clears it, and that `RSTS` says
+   whether the watchdog reset the machine. NeOS's update scenarios check the reset
+   itself: that the image is loaded again and the card keeps what was written to it.
 
 ## Consequences
 
