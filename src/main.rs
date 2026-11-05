@@ -18,6 +18,7 @@ mod rng;
 mod system_timer;
 mod usb;
 mod usb_devices;
+mod usb_network;
 
 use std::io::Read;
 use std::process::ExitCode;
@@ -38,7 +39,8 @@ const FAULT_EXIT_CODE: u8 = 70;
 
 const USAGE: &str = "\
 usage: nebu [--semihosting] [--trace] [--sd <card.img>] [--load <file>@<address>]...
-            [--screen <file.ppm>] [--keyboard] [--keys <list>] <kernel8.img>
+            [--screen <file.ppm>] [--keyboard] [--keys <list>] [--network]
+            <kernel8.img>
 
   --semihosting  let `hlt #0xf000` make semihosting calls, as QEMU's -semihosting does
   --trace        print every instruction to standard error before running it
@@ -58,7 +60,10 @@ usage: nebu [--semihosting] [--trace] [--sd <card.img>] [--load <file>@<address>
                  report, the next of these presses (+name) and releases (-name),
                  separated by commas, with QEMU's names for keys, such as
                  +shift,+h,-h,-shift; ~N holds the keys as they are for the next N
-                 times it asks";
+                 times it asks
+  --network      plug a USB network card into the USB port, behind a hub, on a
+                 network whose gateway answers ARP, as QEMU's -device usb-net with
+                 -netdev user does; not with a keyboard";
 
 fn main() -> ExitCode {
     let mut semihosting = false;
@@ -67,6 +72,7 @@ fn main() -> ExitCode {
     let mut loads = Vec::new();
     let mut screen = None;
     let mut keyboard = None;
+    let mut network = false;
     let mut image = None;
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -76,6 +82,7 @@ fn main() -> ExitCode {
             "--keyboard" => {
                 keyboard.get_or_insert_with(Vec::new);
             }
+            "--network" => network = true,
             "--keys" => match arguments.next().as_deref().map(usb_devices::parse_keys) {
                 Some(Ok(keys)) => keyboard.get_or_insert_with(Vec::new).extend(keys),
                 Some(Err(error)) => {
@@ -128,6 +135,10 @@ fn main() -> ExitCode {
         }
     };
 
+    if network && keyboard.is_some() {
+        eprintln!("nebu: --network cannot go with a keyboard: Nebu's hub has one device");
+        return ExitCode::from(2);
+    }
     let card = match card.map(|path| open_card(&path)).transpose() {
         Ok(card) => card,
         Err(error) => {
@@ -136,7 +147,7 @@ fn main() -> ExitCode {
         }
     };
     let uart = Pl011::new(Box::new(std::io::stdout()), read_stdin());
-    let mut bus = Bus::with_devices(uart, Emmc::new(card), Dwc2::new(keyboard));
+    let mut bus = Bus::with_devices(uart, Emmc::new(card), Dwc2::new(keyboard, network));
     if let Err(error) = bus.load(LOAD_ADDRESS, &bytes) {
         eprintln!("nebu: cannot load {image}: {error}");
         return ExitCode::from(2);

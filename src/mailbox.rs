@@ -1,6 +1,6 @@
 //! The VideoCore mailbox, as far as NeOS uses it: asking the firmware how much memory
-//! the CPU has (ADR 0011), for a framebuffer (ADR 0023), and to power the USB
-//! controller (ADR 0024).
+//! the CPU has (ADR 0011), for a framebuffer (ADR 0023), to power the USB
+//! controller (ADR 0024), and for the board's MAC address (ADR 0033).
 //!
 //! The CPU writes the bus address of a message, with a channel number in its low 4
 //! bits, to mailbox 1's WRITE register. The firmware answers in the message itself,
@@ -36,6 +36,10 @@ const SET_PIXEL_ORDER: u32 = 0x0004_8006;
 const SET_VIRTUAL_OFFSET: u32 = 0x0004_8009;
 /// Property tag: turns a device's power on or off.
 const SET_POWER_STATE: u32 = 0x0002_8001;
+/// Property tag: the board's MAC address, in 6 bytes.
+const GET_BOARD_MAC: u32 = 0x0001_0003;
+/// The address QEMU's `raspi3b` gives the board: QEMU's first default address.
+const BOARD_MAC: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
 /// Where QEMU's `raspi3b` puts the framebuffer: 1 MiB into the GPU's memory.
 const FRAMEBUFFER_ADDRESS: u32 = 0x3C10_0000;
 /// The GPU's memory ends where the peripherals start, so the buffer must fit below.
@@ -221,7 +225,18 @@ fn answer(message: &mut [u32], framebuffer: &mut Framebuffer) -> Result<(), &'st
                 message[value] = framebuffer.pitch();
                 4
             }
-            _ => return Err("property tags other than the memory's, the framebuffer's and power"),
+            // Six bytes, in the order they are sent, from the value's first byte.
+            GET_BOARD_MAC if size >= 8 => {
+                let [a, b, c, d, e, f] = BOARD_MAC;
+                message[value] = u32::from_le_bytes([a, b, c, d]);
+                message[value + 1] = u32::from_le_bytes([e, f, 0, 0]);
+                6
+            }
+            _ => {
+                return Err(
+                    "property tags other than the memory's, the framebuffer's, power and the MAC address",
+                );
+            }
         };
         message[index + 2] = RESPONSE_SUCCESS | answered;
         index += 3 + size / 4;
@@ -233,6 +248,15 @@ fn answer(message: &mut [u32], framebuffer: &mut Framebuffer) -> Result<(), &'st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn answers_the_board_mac_address() {
+        let mut message = [32, 0, GET_BOARD_MAC, 8, 0, 0, 0, 0];
+        Mailbox::default().answer(&mut message).unwrap();
+        assert_eq!(message[4], RESPONSE_SUCCESS | 6);
+        assert_eq!(message[5].to_le_bytes(), [0x52, 0x54, 0x00, 0x12]);
+        assert_eq!(message[6].to_le_bytes()[..2], [0x34, 0x56]);
+    }
 
     #[test]
     fn answers_get_arm_memory() {

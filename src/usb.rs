@@ -5,9 +5,13 @@
 //! values and change in the same ways, and a channel runs its whole transfer the
 //! moment it is enabled, a packet at a time, moving its data straight to or from
 //! RAM. A start-of-frame interrupt is raised every millisecond while a device is
-//! attached. Unlike QEMU, Nebu halts on what NeOS does not use, and that QEMU
+//! attached. A bulk transfer the device NAKs stays enabled, with the NAK bit set, and
+//! is tried again after every other transfer, since Nebu's only bulk device, the
+//! network card, gets a frame only in answer to one sent (ADR 0033); QEMU tries
+//! every 250 µs. Unlike QEMU, Nebu halts on what NeOS does not use, and that QEMU
 //! would ignore or get wrong: slave mode, split transactions, low-speed devices,
-//! bulk and isochronous transfers, and a transfer no device answers.
+//! isochronous transfers, a NAK in a control transfer, and a transfer no device
+//! answers.
 
 use crate::usb_devices::{Device, Key, Reply, Token};
 
@@ -96,6 +100,7 @@ const ADDRESS_SHIFT: u32 = 22;
 const CHANNEL_DISABLE: u32 = 1 << 30;
 const CHANNEL_ENABLE: u32 = 1 << 31;
 const CONTROL: u32 = 0;
+const BULK: u32 = 2;
 const INTERRUPT: u32 = 3;
 /// HCINT's bits, and those that exist.
 const TRANSFER_COMPLETE: u32 = 1 << 0;
@@ -144,7 +149,10 @@ pub struct Dwc2 {
     channel_mask: u32,
     port: u32,
     channels: [Channel; CHANNELS],
-    /// The device on the root port, if any: QEMU's hub, with a keyboard.
+    /// The channels whose bulk transfer the device NAKed, to be tried again.
+    waiting: [bool; CHANNELS],
+    /// The device on the root port, if any: QEMU's hub, with a keyboard or a
+    /// network card.
     root: Option<Device>,
     /// The core's counter, and the frames since the device was attached at boot.
     now: u64,
@@ -153,8 +161,9 @@ pub struct Dwc2 {
 
 impl Dwc2 {
     /// A controller as QEMU resets it, with a hub and keyboard attached if
-    /// `keyboard` holds the keys to type on it.
-    pub fn new(keyboard: Option<Vec<Key>>) -> Dwc2 {
+    /// `keyboard` holds the keys to type on it, or else a hub and network card if
+    /// `network`.
+    pub fn new(keyboard: Option<Vec<Key>>, network: bool) -> Dwc2 {
         let mut dwc2 = Dwc2 {
             ahb: 0,
             usb: 5 << 10,
@@ -169,12 +178,17 @@ impl Dwc2 {
             channel_mask: 0,
             port: PORT_POWER,
             channels: [Channel::default(); CHANNELS],
+            waiting: [false; CHANNELS],
             root: None,
             now: 0,
             frames: 0,
         };
-        if let Some(keys) = keyboard {
-            dwc2.root = Some(Device::hub_with_keyboard(keys));
+        dwc2.root = match (keyboard, network) {
+            (Some(keys), _) => Some(Device::hub_with_keyboard(keys)),
+            (None, true) => Some(Device::hub_with_network()),
+            (None, false) => None,
+        };
+        if dwc2.root.is_some() {
             dwc2.port |= FULL_SPEED | CONNECTION_DETECTED | CONNECTED;
             dwc2.status |= PORT_INTERRUPT;
         }
@@ -303,13 +317,16 @@ impl Dwc2 {
             HCCHAR => {
                 let old = channel.characteristics;
                 if value & CHANNEL_DISABLE != 0 && old & CHANNEL_DISABLE == 0 {
-                    // Disabling halts it at once, since no transfer is ever left
-                    // running.
+                    // Disabling halts it at once, and a bulk transfer waiting for
+                    // its device is not tried again. QEMU would go on trying it.
                     channel.characteristics = value & !(CHANNEL_ENABLE | CHANNEL_DISABLE);
                     channel.interrupts |= HALTED;
+                    self.waiting[number] = false;
                 } else if value & CHANNEL_ENABLE != 0 && old & CHANNEL_ENABLE == 0 {
                     channel.characteristics = value & !CHANNEL_DISABLE;
+                    self.waiting[number] = false;
                     self.transfer(number, memory)?;
+                    self.retry_waiting(number, memory)?;
                 } else {
                     channel.characteristics = value | old & (CHANNEL_DISABLE | CHANNEL_ENABLE);
                 }
@@ -344,8 +361,8 @@ impl Dwc2 {
             return Err("USB: a transfer with a largest packet of 0");
         }
         let kind = characteristics >> TYPE_SHIFT & 3;
-        if kind != CONTROL && kind != INTERRUPT {
-            return Err("USB: a bulk or isochronous transfer, which Nebu does not model");
+        if kind != CONTROL && kind != INTERRUPT && kind != BULK {
+            return Err("USB: an isochronous transfer, which Nebu does not model");
         }
         let pid = channel.size >> PID_SHIFT & 3;
         if pid == PID_DATA2 {
@@ -394,17 +411,34 @@ impl Dwc2 {
                         "USB: a NAK in a control transfer, which Nebu's devices never send",
                     );
                 }
+                // A bulk channel stays enabled, as QEMU's does, and is tried again
+                // with what is left of its transfer.
+                Reply::Nak if kind == BULK => break NAK,
                 Reply::Nak => break NAK | HALTED,
                 Reply::Stall => break STALL | HALTED,
             }
         };
+        self.waiting[number] = interrupts & HALTED == 0;
         let channel = &mut self.channels[number];
         channel.size = channel.size & !(SIZE_MASK | PACKETS_MASK << PACKETS_SHIFT)
             | length as u32 & SIZE_MASK
             | (packets & PACKETS_MASK) << PACKETS_SHIFT;
         channel.dma = dma;
-        channel.characteristics &= !CHANNEL_ENABLE;
+        if interrupts & HALTED != 0 {
+            channel.characteristics &= !CHANNEL_ENABLE;
+        }
         channel.interrupts |= interrupts;
+        Ok(())
+    }
+
+    /// Tries again each bulk transfer, besides channel `done`'s, that its device
+    /// NAKed, since the transfer just run may have given it something.
+    fn retry_waiting(&mut self, done: usize, memory: &mut dyn Memory) -> Result<(), &'static str> {
+        for number in 0..CHANNELS {
+            if number != done && self.waiting[number] {
+                self.transfer(number, memory)?;
+            }
+        }
         Ok(())
     }
 
@@ -533,19 +567,19 @@ mod tests {
 
     #[test]
     fn starts_as_qemu_does_with_a_device_attached() {
-        let mut dwc2 = Dwc2::new(Some(Vec::new()));
+        let mut dwc2 = Dwc2::new(Some(Vec::new()), false);
         assert_eq!(dwc2.read(GSNPSID), Some(SYNOPSYS_ID));
         assert_eq!(
             dwc2.read(HPRT0),
             Some(PORT_POWER | FULL_SPEED | CONNECTION_DETECTED | CONNECTED)
         );
         assert_ne!(dwc2.read(GINTSTS).unwrap() & PORT_INTERRUPT, 0);
-        assert_eq!(Dwc2::new(None).read(HPRT0), Some(PORT_POWER));
+        assert_eq!(Dwc2::new(None, false).read(HPRT0), Some(PORT_POWER));
     }
 
     #[test]
     fn reads_a_descriptor_after_a_port_reset() {
-        let mut dwc2 = Dwc2::new(Some(Vec::new()));
+        let mut dwc2 = Dwc2::new(Some(Vec::new()), false);
         let mut ram = Ram::default();
         write(&mut dwc2, &mut ram, GAHBCFG, DMA_ENABLE);
         write(&mut dwc2, &mut ram, HPRT0, PORT_POWER | PORT_RESET);
@@ -569,7 +603,7 @@ mod tests {
 
     #[test]
     fn halts_on_what_nebu_does_not_model() {
-        let mut dwc2 = Dwc2::new(Some(Vec::new()));
+        let mut dwc2 = Dwc2::new(Some(Vec::new()), false);
         let mut ram = Ram::default();
         // Slave mode, then a transfer before the port is enabled.
         assert!(dwc2.write(CHANNEL_BASE + HCCHAR, 8 | CHANNEL_ENABLE, &mut ram).is_err());
@@ -581,7 +615,7 @@ mod tests {
 
     #[test]
     fn raises_start_of_frame_each_millisecond() {
-        let mut dwc2 = Dwc2::new(Some(Vec::new()));
+        let mut dwc2 = Dwc2::new(Some(Vec::new()), false);
         let mut ram = Ram::default();
         write(&mut dwc2, &mut ram, GINTSTS, u32::MAX);
         write(&mut dwc2, &mut ram, GINTMSK, START_OF_FRAME);
