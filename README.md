@@ -27,7 +27,7 @@ through the firmware mailbox, keeps a framebuffer it can save as an image, runs
 the kernel's threads at EL0 with their system calls,
 preempts them with the virtual timer's interrupt, wakes its drivers with the
 system timer's, the UART's, the SD card controller's and the USB controller's,
-reads and writes blocks of an SD card image, runs USB transfers to a hub and keyboard,
+reads and writes blocks of an SD card image, runs USB transfers to a hub and a keyboard or a network card, whose network answers ARP,
 gives out random words, and takes the exceptions and aborts the kernel's tests raise. Its output matches QEMU's byte for byte, including
 the panic path and the kernel's fault reports. It currently implements 96 A64
 instructions, 27 system registers, six kinds of exception and eight devices; see
@@ -52,6 +52,7 @@ cargo build --release
 | `--screen <file.ppm>` | When the machine stops, saves what the screen shows to `<file.ppm>`, as QEMU's `screendump` does ([ADR 0023](docs/decisions/0023-the-framebuffer.md)). |
 | `--keyboard` | Plugs a USB keyboard into the USB port, behind a hub, as QEMU's `-device usb-kbd` does ([ADR 0024](docs/decisions/0024-the-usb-controller-and-keyboard.md)). |
 | `--keys <list>` | Plugs in the keyboard and types on it, a press (`+name`) or release (`-name`) each time NeOS polls it, with QEMU's names for keys ([ADR 0025](docs/decisions/0025-typing-on-the-keyboard.md)). |
+| `--network` | Plugs QEMU's USB network card into the USB port, behind a hub, on a network whose gateway answers ARP, as QEMU's `-device usb-net` with `-netdev user` does; not with a keyboard ([ADR 0033](docs/decisions/0033-the-network-card-and-bulk-transfers.md)). |
 
 The emulated serial port is Nebu's standard output and standard input, like QEMU's
 `-serial stdio`.
