@@ -409,6 +409,17 @@ impl Device {
         hub
     }
 
+    /// The keys still to be typed on the keyboard behind this hub, if it has one, for
+    /// the keyboard that stays plugged in when the machine resets (ADR 0036).
+    pub fn into_keys(self) -> Option<Vec<Key>> {
+        match self.kind {
+            Kind::Keyboard(keyboard) => Some(keyboard.keys.into()),
+            Kind::Hub { ports } => {
+                ports.into_iter().find_map(|port| port.device.and_then(|device| device.into_keys()))
+            }
+        }
+    }
+
     fn new(kind: Kind) -> Device {
         let mut device =
             Device { address: 0, configured: false, control: Control::default(), kind };
