@@ -405,6 +405,8 @@ pub enum Instruction {
     /// DSB: data synchronisation barrier. `option` is the CRm field, naming which
     /// accesses it waits for.
     Dsb { option: u8 },
+    /// DMB: data memory barrier, with `option` as for DSB (ADR 0040).
+    Dmb { option: u8 },
     /// IC IALLU: invalidate the whole instruction cache.
     IcIallu,
     /// IC IALLUIS: IC IALLU on every core (ADR 0030).
@@ -801,6 +803,7 @@ fn system(word: u32) -> Result<Instruction, DecodeError> {
             // CRm 0b0000 and 0b0100 with DSB's op2 are SSBB and PSSBB instead.
             (0b100, 0b0000 | 0b0100) => Err(DecodeError::Unimplemented),
             (0b100, option) => Ok(Instruction::Dsb { option }),
+            (0b101, option) => Ok(Instruction::Dmb { option }),
             (0b110, _) => Ok(Instruction::Isb),
             // CLREX, with any CRm.
             (0b010, _) => Ok(Instruction::Clrex),
@@ -1603,6 +1606,10 @@ impl fmt::Display for Instruction {
                 "" => write!(f, "dsb #{option}"),
                 name => write!(f, "dsb {name}"),
             },
+            Dmb { option } => match BARRIER_OPTIONS[usize::from(option)] {
+                "" => write!(f, "dmb #{option}"),
+                name => write!(f, "dmb {name}"),
+            },
             IcIallu => write!(f, "ic iallu"),
             IcIalluis => write!(f, "ic ialluis"),
             DcCivac { rt } => write!(f, "dc civac, {}", zr(rt, Width::W64)),
@@ -1786,6 +1793,9 @@ mod tests {
             (0xd503205f, Wfe),
             (0xd503201f, Nop),
             (0xd5033fdf, Isb),
+            // ADR 0040: the barriers Rust's fences compile to.
+            (0xd5033bbf, Dmb { option: 0b1011 }),
+            (0xd50339bf, Dmb { option: 0b1001 }),
             (0x17ffffff, B { offset: -4 }),
             (0x94000100, Bl { offset: 0x400 }),
             (0x54000062, BCond { condition: 2, offset: 0xc }),

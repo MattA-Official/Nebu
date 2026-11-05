@@ -1052,8 +1052,10 @@ impl Cpu {
             }
             Eret => next = self.exception_return()?,
             // No pipeline, caches or TLB are modelled, so a barrier has nothing to wait
-            // for and there is nothing to invalidate.
-            Nop | Isb | Dsb { .. } => {}
+            // for and there is nothing to invalidate. The cores run in turn, one
+            // instruction each, so every access is seen in order without DMB (ADR
+            // 0040).
+            Nop | Isb | Dsb { .. } | Dmb { .. } => {}
             // These are undefined at EL0, as on hardware.
             IcIallu
             | IcIalluis
