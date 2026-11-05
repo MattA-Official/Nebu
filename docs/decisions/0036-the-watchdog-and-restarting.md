@@ -1,6 +1,6 @@
 # 0036. The watchdog, and restarting the machine
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-04
 
 ## Context
