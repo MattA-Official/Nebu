@@ -292,6 +292,12 @@ impl Emmc {
         }
     }
 
+    /// The card in the slot, put back in its idle state, as power going off and on
+    /// leaves it (ADR 0036).
+    pub fn into_card(self) -> Option<Card> {
+        self.card.map(|card| Card { state: State::Idle, application: false, ..card })
+    }
+
     /// Resets every register, but not the card.
     fn reset(&mut self) {
         let card = self.card.take();
