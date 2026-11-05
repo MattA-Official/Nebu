@@ -47,3 +47,5 @@ works live here.
 | 0031 | [Exclusive loads and stores, and every core's timer](0031-exclusives-and-every-cores-timer.md) | Accepted |
 | 0032 | [The hardware random number generator](0032-the-random-number-generator.md) | Accepted |
 | 0033 | [A network card, bulk transfers and the board's MAC address](0033-the-network-card-and-bulk-transfers.md) | Proposed |
+| 0036 | [The watchdog, and restarting the machine](0036-the-watchdog-and-restarting.md) | Accepted |
+| 0042 | [DMB, ADC and SMULH](0042-dmb-adc-and-smulh.md) | Proposed |

@@ -84,6 +84,13 @@ impl Pl011 {
         }
     }
 
+    /// The UART as it is after a reset, still writing to the same output and reading
+    /// the same input (ADR 0036). Bytes received but not read are lost with the
+    /// FIFO.
+    pub fn reset(self) -> Pl011 {
+        Pl011::new(self.output, self.input)
+    }
+
     /// Takes any bytes that have arrived from `input`. Returns whether the receive
     /// interrupt was raised by them.
     pub fn poll(&mut self) -> bool {

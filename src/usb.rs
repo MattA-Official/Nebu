@@ -160,6 +160,13 @@ pub struct Dwc2 {
 }
 
 impl Dwc2 {
+    /// The keys still to be typed, if a keyboard is plugged in: it stays plugged in
+    /// when the machine resets, and what was typed before is not typed again (ADR
+    /// 0036).
+    pub fn into_keyboard(self) -> Option<Vec<Key>> {
+        self.root.and_then(Device::into_keys)
+    }
+
     /// A controller as QEMU resets it, with a hub and keyboard attached if
     /// `keyboard` holds the keys to type on it, or else a hub and network card if
     /// `network`.
