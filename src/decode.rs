@@ -428,6 +428,12 @@ pub enum Instruction {
     /// STLR, STLRH, STLRB: store the low `bytes` bytes of `rt` to the address in `rn`
     /// with release ordering (ADR 0030).
     Stlr { bytes: u8, rt: u8, rn: u8 },
+    /// `ldxr` and `ldaxr`, of every size: an exclusive load (ADR 0031).
+    LoadExclusive { bytes: u8, rt: u8, rn: u8, acquire: bool },
+    /// `stxr` and `stlxr`, of every size: an exclusive store, whose status goes to `rs`.
+    StoreExclusive { bytes: u8, rs: u8, rt: u8, rn: u8, release: bool },
+    /// Clears the core's exclusive monitor.
+    Clrex,
     /// MRS: read a system register into `rt`. 31 is the zero register.
     Mrs { rt: u8, register: SystemRegister },
     /// MSR (register): write `rt` to a system register. 31 is the zero register.
@@ -796,6 +802,8 @@ fn system(word: u32) -> Result<Instruction, DecodeError> {
             (0b100, 0b0000 | 0b0100) => Err(DecodeError::Unimplemented),
             (0b100, option) => Ok(Instruction::Dsb { option }),
             (0b110, _) => Ok(Instruction::Isb),
+            // CLREX, with any CRm.
+            (0b010, _) => Ok(Instruction::Clrex),
             _ => Err(DecodeError::Unimplemented),
         },
         // SYS: cache and TLB maintenance and address translation.
@@ -837,6 +845,18 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
             Instruction::Ldar { bytes, rt, rn }
         } else {
             Instruction::Stlr { bytes, rt, rn }
+        });
+    }
+
+    // Exclusive loads and stores: size 001000 0 L 0 Rs o0 11111 Rn Rt (ADR 0031).
+    if word & 0x3FA0_7C00 == 0x0800_7C00 {
+        let bytes = 1 << bits(word, 31, 30);
+        let acquire_or_release = bits(word, 15, 15) == 1;
+        return Ok(if bits(word, 22, 22) == 1 {
+            Instruction::LoadExclusive { bytes, rt, rn, acquire: acquire_or_release }
+        } else {
+            let rs = reg(word, 16);
+            Instruction::StoreExclusive { bytes, rs, rt, rn, release: acquire_or_release }
         });
     }
 
@@ -1591,6 +1611,25 @@ impl fmt::Display for Instruction {
             TlbiVmalle1is => write!(f, "tlbi vmalle1is"),
             TlbiAside1is { rt } => write!(f, "tlbi aside1is, {}", zr(rt, Width::W64)),
             Sev => write!(f, "sev"),
+            Clrex => write!(f, "clrex"),
+            LoadExclusive { bytes, rt, rn, acquire } => {
+                let suffix = ["b", "h", "", ""][bytes.trailing_zeros() as usize];
+                let a = if acquire { "a" } else { "" };
+                let width = if bytes == 8 { Width::W64 } else { Width::W32 };
+                write!(f, "ld{a}xr{suffix} {}, [{}]", zr(rt, width), sp(rn, Width::W64))
+            }
+            StoreExclusive { bytes, rs, rt, rn, release } => {
+                let suffix = ["b", "h", "", ""][bytes.trailing_zeros() as usize];
+                let l = if release { "l" } else { "" };
+                let width = if bytes == 8 { Width::W64 } else { Width::W32 };
+                write!(
+                    f,
+                    "st{l}xr{suffix} {}, {}, [{}]",
+                    zr(rs, Width::W32),
+                    zr(rt, width),
+                    sp(rn, Width::W64)
+                )
+            }
             Ldar { bytes, rt, rn } | Stlr { bytes, rt, rn } => {
                 let load = matches!(self, Ldar { .. });
                 let mnemonic = match (load, bytes) {
@@ -2105,6 +2144,13 @@ mod tests {
         assert_eq!(decode(0xc8dffc20).unwrap().to_string(), "ldar x0, [x1]");
         assert_eq!(decode(0xd508831f).unwrap().to_string(), "tlbi vmalle1is");
         assert_eq!(decode(0xd5088348).unwrap().to_string(), "tlbi aside1is, x8");
+        assert_eq!(decode(0x885ffc08).unwrap().to_string(), "ldaxr w8, [x0]");
+        assert_eq!(decode(0x8809fc0a).unwrap().to_string(), "stlxr w9, w10, [x0]");
+        assert_eq!(decode(0xc85f7c41).unwrap().to_string(), "ldxr x1, [x2]");
+        assert_eq!(decode(0xc8037c41).unwrap().to_string(), "stxr w3, x1, [x2]");
+        assert_eq!(decode(0x485f7c41).unwrap().to_string(), "ldxrh w1, [x2]");
+        assert_eq!(decode(0xd503305f).unwrap().to_string(), "clrex");
+        assert_eq!(decode(0xd5033f5f).unwrap().to_string(), "clrex");
         assert_eq!(decode(0x1e202008), Err(DecodeError::Unimplemented)); // fcmp s0, s0
         assert_eq!(
             decode(0xd53bd060), // mrs x0, TPIDRRO_EL0
