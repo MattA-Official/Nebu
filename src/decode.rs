@@ -289,6 +289,10 @@ pub enum Instruction {
     Rbit { width: Width, rd: u8, rn: u8 },
     /// CLZ: `rd` = the number of leading zero bits in `rn`. 31 is the zero register.
     Clz { width: Width, rd: u8, rn: u8 },
+    /// REV16, REV32 and REV: `rd` = `rn` with the bytes of each `container`-bit
+    /// piece in reverse order; REV's container is the whole register. 31 is the zero
+    /// register.
+    Rev { width: Width, rd: u8, rn: u8, container: u8 },
     /// EXTR: the `width` bits of `rn:rm` starting at bit `lsb`. 31 is the zero
     /// register.
     Extr { width: Width, rd: u8, rn: u8, rm: u8, lsb: u8 },
@@ -296,6 +300,9 @@ pub enum Instruction {
     /// `amount`)`. `rd` and `rn` 31 are SP, `rm` 31 is the zero register. `option` is
     /// as for SUBS.
     AddExtendedRegister { width: Width, rd: u8, rn: u8, rm: u8, option: u8, amount: u8 },
+    /// ADDS (extended register): `rd = rn + (rm extended by `option`, shifted left
+    /// by `amount`)`, setting the flags. Registers as for SUBS (ADR 0043).
+    AddsExtendedRegister { width: Width, rd: u8, rn: u8, rm: u8, option: u8, amount: u8 },
     /// SUB (extended register): `rd = rn - (rm extended by `option`, shifted left by
     /// `amount`)`. `rd` and `rn` 31 are SP, `rm` 31 is the zero register. `option` is
     /// as for SUBS.
@@ -305,6 +312,8 @@ pub enum Instruction {
     /// `rm` 31 is the zero register. `option` is the field's value: UXTB, UXTH,
     /// UXTW, UXTX, then SXTB, SXTH, SXTW, SXTX.
     SubsExtendedRegister { width: Width, rd: u8, rn: u8, rm: u8, option: u8, amount: u8 },
+    /// ADC: `rd = rn + rm + C`. 31 is the zero register (ADR 0042).
+    Adc { width: Width, rd: u8, rn: u8, rm: u8 },
     /// SBC: `rd = rn - rm - (1 - C)`. 31 is the zero register.
     Sbc { width: Width, rd: u8, rn: u8, rm: u8 },
     /// SBCS: `rd = rn - rm - (1 - C)`, setting the flags. 31 is the zero register.
@@ -338,6 +347,9 @@ pub enum Instruction {
     /// UMULH: `rd` = the high 64 bits of the 128-bit product `rn * rm`, unsigned. 31
     /// is the zero register.
     Umulh { rd: u8, rn: u8, rm: u8 },
+    /// SMULH: `rd` = the high 64 bits of the 128-bit product `rn * rm`, signed. 31
+    /// is the zero register (ADR 0042).
+    Smulh { rd: u8, rn: u8, rm: u8 },
     /// MSUB: `rd = ra - rn * rm`, keeping the low bits. 31 is the zero register.
     Msub { width: Width, rd: u8, rn: u8, rm: u8, ra: u8 },
     /// SMADDL, SMSUBL, UMADDL and UMSUBL: `rd = ra + rn * rm`, or `ra - rn * rm` if
@@ -405,6 +417,9 @@ pub enum Instruction {
     /// DSB: data synchronisation barrier. `option` is the CRm field, naming which
     /// accesses it waits for.
     Dsb { option: u8 },
+    /// DMB: data memory barrier. `option` is the CRm field, naming which accesses it
+    /// orders (ADR 0042).
+    Dmb { option: u8 },
     /// IC IALLU: invalidate the whole instruction cache.
     IcIallu,
     /// IC IALLUIS: IC IALLU on every core (ADR 0030).
@@ -456,6 +471,9 @@ pub enum Instruction {
     /// LDRSB (immediate): load a byte into `rt`, sign-extended to `width`.
     /// `rn` 31 is SP, `rt` 31 the zero register.
     LdrsbImmediate { width: Width, rt: u8, rn: u8, index: Index, offset: i64 },
+    /// LDRSW (immediate): load a word into `rt`, sign-extended to 64 bits. `rn` 31 is
+    /// SP, `rt` 31 the zero register (ADR 0043).
+    LdrswImmediate { rt: u8, rn: u8, index: Index, offset: i64 },
     /// LDRSB (register): load a byte from `rn + (rm extended)` into `rt`,
     /// sign-extended to `width`. `rn` 31 is SP; `rt` and `rm` 31 the zero register.
     LdrsbRegister { width: Width, rt: u8, rn: u8, rm: u8, extend: Extend },
@@ -801,6 +819,7 @@ fn system(word: u32) -> Result<Instruction, DecodeError> {
             // CRm 0b0000 and 0b0100 with DSB's op2 are SSBB and PSSBB instead.
             (0b100, 0b0000 | 0b0100) => Err(DecodeError::Unimplemented),
             (0b100, option) => Ok(Instruction::Dsb { option }),
+            (0b101, option) => Ok(Instruction::Dmb { option }),
             (0b110, _) => Ok(Instruction::Isb),
             // CLREX, with any CRm.
             (0b010, _) => Ok(Instruction::Clrex),
@@ -952,6 +971,10 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
                             offset,
                         })
                     }
+                    // LDURSW, as LDRSW with an offset.
+                    (0b10, 0b10) => {
+                        Ok(Instruction::LdrswImmediate { rt, rn, index: Index::Offset, offset })
+                    }
                     _ => Err(DecodeError::Unimplemented), // other sign-extending loads
                 };
             }
@@ -1021,6 +1044,7 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
             }
             (0b01, 0b00) => Ok(Instruction::StrhImmediate { rt, rn, index, offset }),
             (0b01, 0b01) => Ok(Instruction::LdrhImmediate { rt, rn, index, offset }),
+            (0b10, 0b10) => Ok(Instruction::LdrswImmediate { rt, rn, index, offset }),
             (0b10 | 0b11, 0b00) => {
                 let width = Width::from_bit(size & 1);
                 Ok(Instruction::StrImmediate { width, rt, rn, index, offset })
@@ -1052,6 +1076,9 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
             }),
             (0b00, 0b110, 0) if width == Width::W64 && bits(word, 14, 10) == 31 => {
                 Ok(Instruction::Umulh { rd: reg(word, 0), rn: reg(word, 5), rm: reg(word, 16) })
+            }
+            (0b00, 0b010, 0) if width == Width::W64 && bits(word, 14, 10) == 31 => {
+                Ok(Instruction::Smulh { rd: reg(word, 0), rn: reg(word, 5), rm: reg(word, 16) })
             }
             (0b00, 0b000, 1) => Ok(Instruction::Msub {
                 width,
@@ -1131,28 +1158,36 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
         return match bits(word, 30, 29) {
             0b00 => Ok(Instruction::AddExtendedRegister { width, rd, rn, rm, option, amount }),
             0b10 => Ok(Instruction::SubExtendedRegister { width, rd, rn, rm, option, amount }),
-            0b11 => Ok(Instruction::SubsExtendedRegister { width, rd, rn, rm, option, amount }),
-            _ => Err(DecodeError::Unimplemented), // ADDS
+            0b01 => Ok(Instruction::AddsExtendedRegister { width, rd, rn, rm, option, amount }),
+            _ => Ok(Instruction::SubsExtendedRegister { width, rd, rn, rm, option, amount }),
         };
     }
 
-    // Add/subtract (with carry). Only SBC and SBCS (op = 1).
+    // Add/subtract (with carry). ADC, SBC and SBCS.
     if bits(word, 28, 21) == 0b1101_0000 && bits(word, 15, 10) == 0 {
         let width = Width::from_bit(bits(word, 31, 31));
         let (rd, rn, rm) = (reg(word, 0), reg(word, 5), reg(word, 16));
         return match bits(word, 30, 29) {
+            0b00 => Ok(Instruction::Adc { width, rd, rn, rm }),
             0b10 => Ok(Instruction::Sbc { width, rd, rn, rm }),
             0b11 => Ok(Instruction::Sbcs { width, rd, rn, rm }),
-            _ => Err(DecodeError::Unimplemented), // ADC, ADCS
+            _ => Err(DecodeError::Unimplemented), // ADCS
         };
     }
 
-    // Data-processing (1 source). Only RBIT and CLZ.
+    // Data-processing (1 source). Only RBIT, REV16, REV32, REV and CLZ.
     if bits(word, 30, 21) == 0b10_1101_0110 && bits(word, 20, 16) == 0 {
         let width = Width::from_bit(bits(word, 31, 31));
         let (rd, rn) = (reg(word, 0), reg(word, 5));
         return match bits(word, 15, 10) {
             0b00_0000 => Ok(Instruction::Rbit { width, rd, rn }),
+            0b00_0001 => Ok(Instruction::Rev { width, rd, rn, container: 16 }),
+            0b00_0010 => Ok(Instruction::Rev { width, rd, rn, container: 32 }),
+            0b00_0011 if width == Width::W64 => {
+                Ok(Instruction::Rev { width, rd, rn, container: 64 })
+            }
+            // REV with a 64-bit container needs a 64-bit register.
+            0b00_0011 => Err(DecodeError::Unallocated),
             0b00_0100 => Ok(Instruction::Clz { width, rd, rn }),
             _ => Err(DecodeError::Unimplemented),
         };
@@ -1419,6 +1454,14 @@ impl fmt::Display for Instruction {
                 write!(f, "udiv {}, {}, {}", zr(rd, width), zr(rn, width), zr(rm, width))
             }
             Clz { width, rd, rn } => write!(f, "clz {}, {}", zr(rd, width), zr(rn, width)),
+            Rev { width, rd, rn, container } => {
+                let name = match (container, width) {
+                    (16, _) => "rev16",
+                    (32, Width::W64) => "rev32",
+                    _ => "rev",
+                };
+                write!(f, "{name} {}, {}", zr(rd, width), zr(rn, width))
+            }
             Extr { width, rd, rn, rm, lsb } => {
                 write!(f, "extr {}, {}, {}, #{lsb}", zr(rd, width), zr(rn, width), zr(rm, width))
             }
@@ -1426,6 +1469,13 @@ impl fmt::Display for Instruction {
                 f,
                 "add {}, {}, {}",
                 sp(rd, width),
+                sp(rn, width),
+                Extended { rm, option, amount }
+            ),
+            AddsExtendedRegister { width, rd, rn, rm, option, amount } => write!(
+                f,
+                "adds {}, {}, {}",
+                zr(rd, width),
                 sp(rn, width),
                 Extended { rm, option, amount }
             ),
@@ -1443,6 +1493,9 @@ impl fmt::Display for Instruction {
                 sp(rn, width),
                 Extended { rm, option, amount }
             ),
+            Adc { width, rd, rn, rm } => {
+                write!(f, "adc {}, {}, {}", zr(rd, width), zr(rn, width), zr(rm, width))
+            }
             Sbc { width, rd, rn, rm } => {
                 write!(f, "sbc {}, {}, {}", zr(rd, width), zr(rn, width), zr(rm, width))
             }
@@ -1505,6 +1558,13 @@ impl fmt::Display for Instruction {
             Umulh { rd, rn, rm } => write!(
                 f,
                 "umulh {}, {}, {}",
+                zr(rd, Width::W64),
+                zr(rn, Width::W64),
+                zr(rm, Width::W64)
+            ),
+            Smulh { rd, rn, rm } => write!(
+                f,
+                "smulh {}, {}, {}",
                 zr(rd, Width::W64),
                 zr(rn, Width::W64),
                 zr(rm, Width::W64)
@@ -1603,6 +1663,10 @@ impl fmt::Display for Instruction {
                 "" => write!(f, "dsb #{option}"),
                 name => write!(f, "dsb {name}"),
             },
+            Dmb { option } => match BARRIER_OPTIONS[usize::from(option)] {
+                "" => write!(f, "dmb #{option}"),
+                name => write!(f, "dmb {name}"),
+            },
             IcIallu => write!(f, "ic iallu"),
             IcIalluis => write!(f, "ic ialluis"),
             DcCivac { rt } => write!(f, "dc civac, {}", zr(rt, Width::W64)),
@@ -1659,6 +1723,9 @@ impl fmt::Display for Instruction {
             }
             LdrsbImmediate { width, rt, rn, index, offset } => {
                 write!(f, "ldrsb {}, {}", zr(rt, width), Address { rn, index, offset })
+            }
+            LdrswImmediate { rt, rn, index, offset } => {
+                write!(f, "ldrsw {}, {}", zr(rt, Width::W64), Address { rn, index, offset })
             }
             LdrRegister { width, rt, rn, rm, extend, amount } => {
                 let (name, rm_width) = extend_name(extend);
@@ -1861,6 +1928,9 @@ mod tests {
             (0x382b6b0a, StrbRegister { rt: 10, rn: 24, rm: 11, extend: Extend::Lsl }),
             (0x38e9680d, LdrsbRegister { width: W32, rt: 13, rn: 0, rm: 9, extend: Extend::Lsl }),
             (0x38a9680d, LdrsbRegister { width: W64, rt: 13, rn: 0, rm: 9, extend: Extend::Lsl }),
+            // ldrsw x8, [sp, #0x10c8]; ldursw x1, [x2, #-4] (ADR 0043).
+            (0xb990cbe8, LdrswImmediate { rt: 8, rn: 31, index: Index::Offset, offset: 0x10c8 }),
+            (0xb89fc041, LdrswImmediate { rt: 1, rn: 2, index: Index::Offset, offset: -4 }),
             (0xb8a0794c, LdrswRegister { rt: 12, rn: 10, rm: 0, extend: Extend::Lsl, amount: 2 }),
             (0x3840140b, LdrbImmediate { rt: 11, rn: 0, index: Index::Post, offset: 1 }),
             (0x790053e8, StrhImmediate { rt: 8, rn: 31, index: Index::Offset, offset: 0x28 }),
@@ -1881,6 +1951,9 @@ mod tests {
             (0x58000382, LdrLiteral { width: W64, rt: 2, offset: 0x70 }),
             (0xd61f0020, Br { rn: 1 }),
             (0xd5033f9f, Dsb { option: 0b1111 }),
+            // NeOS's time frame, read with acquire loads (NeOS ADR 0081).
+            (0xd50339bf, Dmb { option: 0b1001 }),
+            (0xd5033bbf, Dmb { option: 0b1011 }),
             (0xd508751f, IcIallu),
             (0x3100043f, AddsImmediate { width: W32, rd: 31, rn: 1, imm: 1 }),
             (0x1280001b, Movn { width: W32, rd: 27, imm16: 0, shift: 0 }),
@@ -1982,6 +2055,16 @@ mod tests {
                 },
             ),
             (0xdac00309, Rbit { width: W64, rd: 9, rn: 24 }),
+            // rev w9, w9; rev x1, x2; rev16 w3, w4; rev32 x5, x6 (ADR 0043).
+            (0x5ac00929, Rev { width: W32, rd: 9, rn: 9, container: 32 }),
+            // adds w12, w12, w14, uxtb (ADR 0043).
+            (
+                0x2b2e018c,
+                AddsExtendedRegister { width: W32, rd: 12, rn: 12, rm: 14, option: 0, amount: 0 },
+            ),
+            (0xdac00c41, Rev { width: W64, rd: 1, rn: 2, container: 64 }),
+            (0x5ac00483, Rev { width: W32, rd: 3, rn: 4, container: 16 }),
+            (0xdac008c5, Rev { width: W64, rd: 5, rn: 6, container: 32 }),
             (0xdac01129, Clz { width: W64, rd: 9, rn: 9 }),
             (
                 0x6a37035f,
@@ -1995,6 +2078,7 @@ mod tests {
                 },
             ),
             (0x9bc97c29, Umulh { rd: 9, rn: 1, rm: 9 }),
+            (0x9b497c09, Smulh { rd: 9, rn: 0, rm: 9 }),
             (0x1b09d108, Msub { width: W32, rd: 8, rn: 8, rm: 9, ra: 20 }),
             // The file system: `umull x11, w24, w19`, which is UMADDL with the zero
             // register, and the other three forms.
@@ -2012,6 +2096,8 @@ mod tests {
             ),
             (0xfa1f01ad, Sbcs { width: W64, rd: 13, rn: 13, rm: 31 }),
             (0xda1f0130, Sbc { width: W64, rd: 16, rn: 9, rm: 31 }),
+            (0x9a0a0129, Adc { width: W64, rd: 9, rn: 9, rm: 10 }),
+            (0x1a0a0129, Adc { width: W32, rd: 9, rn: 9, rm: 10 }),
             // Stage 5a: threads.
             (
                 0x8b30212e,
@@ -2104,6 +2190,10 @@ mod tests {
     #[test]
     fn prints_instructions_in_assembler_syntax() {
         assert_eq!(decode(0xd53800a1).unwrap().to_string(), "mrs x1, MPIDR_EL1");
+        assert_eq!(decode(0x5ac00929).unwrap().to_string(), "rev w9, w9");
+        assert_eq!(decode(0xdac008c5).unwrap().to_string(), "rev32 x5, x6");
+        // REV of a 32-bit register with a 64-bit container (ADR 0043).
+        assert_eq!(decode(0x5ac00c00), Err(DecodeError::Unallocated));
         assert_eq!(decode(0x92401c21).unwrap().to_string(), "and x1, x1, #0xff");
         assert_eq!(decode(0xf81f0ffe).unwrap().to_string(), "str x30, [sp, #-0x10]!");
         assert_eq!(decode(0xf800843f).unwrap().to_string(), "str xzr, [x1], #0x8");

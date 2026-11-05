@@ -11,10 +11,12 @@ all addressing modes.
 
 | Instruction                  | Needed by                    |
 |------------------------------|------------------------------|
+| ADC                          | NeOS: the clock's time frame ([ADR 0042](decisions/0042-dmb-adc-and-smulh.md)) |
 | ADD (immediate)              | NeOS step 2: boot            |
 | ADD (extended register)      | NeOS stage 5a: threads       |
 | ADD (shifted register)       | NeOS step 2: panic path      |
 | ADDS (immediate)             | NeOS step 3: chainloader     |
+| ADDS (extended register)     | NeOS: reading TZ rules ([ADR 0043](decisions/0043-rev-adds-and-ldrsw.md)) |
 | ADDS (shifted register)      | NeOS stage 3: loading the root task |
 | ADR                          | NeOS step 2: boot            |
 | ADRP                         | NeOS stage 2: MMU            |
@@ -42,6 +44,7 @@ all addressing modes.
 | CSINV                        | NeOS stage 4: capability test |
 | CSNEG                        | NeOS: writing files ([ADR 0029](decisions/0029-csneg.md)) |
 | DC CIVAC                     | NeOS stage 4: asking the firmware about memory |
+| DMB                          | NeOS: the clock's time frame ([ADR 0042](decisions/0042-dmb-adc-and-smulh.md)) |
 | DSB                          | NeOS step 3: starting the kernel |
 | EOR (immediate)              | NeOS stage 2: MMU            |
 | EOR (shifted register)       | NeOS step 3: CRC-32          |
@@ -60,6 +63,7 @@ all addressing modes.
 | LDRH (register)              | NeOS's unsafe code audit: the kernel window as a constant |
 | LDRSB (immediate)            | NeOS's shell: comparing strings ([ADR 0020](decisions/0020-ldrsb-immediate.md)) |
 | LDRSB (register)             | NeOS stage 7: checking UTF-8 ([ADR 0018](decisions/0018-the-uarts-interrupts.md)) |
+| LDRSW (immediate)            | NeOS: local time offsets ([ADR 0043](decisions/0043-rev-adds-and-ldrsw.md)) |
 | LDRSW (register)             | NeOS stage 5b: the ipc test's jump tables |
 | LDUR                         | NeOS stage 4: reading the boot info |
 | LDURB                        | NeOS stage 3: loading the root task |
@@ -79,11 +83,13 @@ all addressing modes.
 | ORR (shifted register)       | NeOS step 2: panic path      |
 | RBIT                         | NeOS stage 4: splitting memory into untyped blocks |
 | RET                          | NeOS step 2: panic path      |
+| REV, REV16, REV32            | NeOS: reading TZif files ([ADR 0043](decisions/0043-rev-adds-and-ldrsw.md)) |
 | SBC                          | NeOS stage 4: checking a split of untyped memory |
 | SBCS                         | NeOS stage 4: capabilities   |
 | SBFM                         | NeOS step 3: CRC-32          |
 | SMADDL                       | NeOS's file system server ([ADR 0021](decisions/0021-widening-multiplies.md)) |
 | SMSUBL                       | NeOS's file system server ([ADR 0021](decisions/0021-widening-multiplies.md)) |
+| SMULH                        | NeOS: the clock's time frame ([ADR 0042](decisions/0042-dmb-adc-and-smulh.md)) |
 | STP                          | NeOS step 2: test exit       |
 | STR (immediate)              | NeOS step 2: boot            |
 | STR (register)               | NeOS stage 2: MMU            |
