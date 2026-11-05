@@ -48,3 +48,4 @@ works live here.
 | 0032 | [The hardware random number generator](0032-the-random-number-generator.md) | Accepted |
 | 0036 | [The watchdog, and restarting the machine](0036-the-watchdog-and-restarting.md) | Accepted |
 | 0042 | [DMB, ADC and SMULH](0042-dmb-adc-and-smulh.md) | Proposed |
+| 0043 | [REV, ADDS (extended register) and LDRSW (immediate)](0043-rev-adds-and-ldrsw.md) | Proposed |
