@@ -1,6 +1,6 @@
 # 0031. Exclusive loads and stores, and every core's timer
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-04
 - **Amends:** [0016](0016-the-timer-and-interrupts.md) (only core 0's timer reaches the
   local block) and [0030](0030-four-cores.md) (decision 5, only core 0 takes interrupts)

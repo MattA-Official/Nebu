@@ -44,5 +44,5 @@ works live here.
 | 0028 | [Writing to the SD card](0028-writing-to-the-sd-card.md) | Accepted |
 | 0029 | [CSNEG](0029-csneg.md) | Accepted |
 | 0030 | [Four cores](0030-four-cores.md) | Accepted; amended by 0031 |
-| 0031 | [Exclusive loads and stores, and every core's timer](0031-exclusives-and-every-cores-timer.md) | Proposed |
+| 0031 | [Exclusive loads and stores, and every core's timer](0031-exclusives-and-every-cores-timer.md) | Accepted |
 | 0032 | [The hardware random number generator](0032-the-random-number-generator.md) | Accepted |
