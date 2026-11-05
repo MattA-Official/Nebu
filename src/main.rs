@@ -244,7 +244,7 @@ fn main() -> ExitCode {
             Some(due) => now = now.max(due.saturating_sub(1)),
             // With nothing due, only input to the UART can wake a core (ADR 0018).
             None if cores.iter().any(|core| {
-                core.state == State::WaitingForInterrupt && core.cpu.takes_interrupts()
+                core.state == State::WaitingForInterrupt && core.cpu.takes_device_interrupts()
             }) && bus.wait_for_input() => {}
             None => {
                 // Nothing will change the screen now, so it is saved before waiting.

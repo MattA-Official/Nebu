@@ -214,6 +214,9 @@ pub struct Cpu {
     semihosting: bool,
     /// Which core this is, from 0 to 3 (ADR 0030).
     pub core: u8,
+    /// Whether an exception or an exception return has happened since the bus last
+    /// heard, which clears the core's exclusive monitor (ADR 0031).
+    monitor_lost: bool,
 }
 
 impl Cpu {
@@ -241,6 +244,7 @@ impl Cpu {
             event: false,
             semihosting,
             core: 0,
+            monitor_lost: false,
         }
     }
 
@@ -324,6 +328,7 @@ impl Cpu {
             ec => ec,
         };
         self.sys.esr_el1 = ec << 26 | ESR_IL | iss;
+        self.monitor_lost = true;
         self.el = 1;
         self.spsel = true;
         self.daif = 0b1111;
@@ -343,6 +348,7 @@ impl Cpu {
         };
         self.sys.spsr_el1 = self.pstate();
         self.sys.elr_el1 = self.pc;
+        self.monitor_lost = true;
         self.el = 1;
         self.spsel = true;
         self.daif = 0b1111;
@@ -392,6 +398,7 @@ impl Cpu {
         self.daif = (spsr >> 6 & 0b1111) as u8;
         self.el = target;
         self.spsel = spsel;
+        self.monitor_lost = true;
         Ok(elr)
     }
 
@@ -521,10 +528,6 @@ impl Cpu {
             // Only the firmware sets the rate, before the kernel starts.
             CntfrqEl0 => return Err(Fault::Unsupported("writing CNTFRQ_EL0")),
             // ISTATUS only reads, so a write keeps only ENABLE and IMASK.
-            // Only core 0's timer reaches the local block's model (ADR 0030).
-            CntvCtlEl0 if self.core != 0 && value & CNTV_CTL_ENABLE != 0 => {
-                return Err(Fault::Unsupported("the timer of cores 1 to 3"));
-            }
             CntvCtlEl0 => self.sys.cntv_ctl_el0 = value & (CNTV_CTL_ENABLE | CNTV_CTL_IMASK),
             CntvCvalEl0 => self.sys.cntv_cval_el0 = value,
             // EL0 is kept away from the timers, and no events are raised from the
@@ -656,23 +659,21 @@ impl Cpu {
         Ok(self.read_sp(rn, Width::W64))
     }
 
-    /// Whether interrupts can reach this core. Only core 0's can (ADRs 0016 and 0030).
-    pub fn takes_interrupts(&self) -> bool {
+    /// Whether device interrupts can reach this core. Only core 0's can, though every
+    /// core has its timer (ADRs 0017 and 0031).
+    pub fn takes_device_interrupts(&self) -> bool {
         self.core == 0
     }
 
     /// Brings the virtual timer's line up to date, and says whether this core has an
-    /// IRQ pending, masked or not. Only core 0 has interrupts (ADRs 0016 and 0030).
+    /// IRQ pending, masked or not (ADRs 0016 and 0031).
     pub fn irq_pending(&mut self, bus: &mut Bus, now: u64) -> bool {
         self.count = now;
-        if !self.takes_interrupts() {
-            return false;
-        }
         // The virtual timer's interrupt reaches the core through the local
         // interrupt controller (ADR 0016).
         let firing = self.virtual_timer_met() && self.sys.cntv_ctl_el0 & CNTV_CTL_IMASK == 0;
-        bus.set_virtual_timer(firing);
-        bus.irq_pending()
+        bus.set_virtual_timer(self.core, firing);
+        bus.irq_pending(self.core)
     }
 
     /// Whether an IRQ is pending and PSTATE.I lets the core take it, between
@@ -685,13 +686,11 @@ impl Cpu {
     /// waits for one: its virtual timer's deadline, or the next device interrupt.
     /// None if only input to the UART could raise one (ADRs 0017 and 0018).
     pub fn next_interrupt(&self, bus: &Bus) -> Option<u64> {
-        if !self.takes_interrupts() {
-            return None;
-        }
         let timer = (self.sys.cntv_ctl_el0 & (CNTV_CTL_ENABLE | CNTV_CTL_IMASK) == CNTV_CTL_ENABLE
-            && bus.virtual_timer_routed())
+            && bus.virtual_timer_routed(self.core))
         .then(|| self.sys.cntv_cval_el0.saturating_add(self.sys.cntvoff_el2));
-        [timer, bus.next_device_interrupt()].into_iter().flatten().min()
+        let device = bus.next_device_interrupt().filter(|_| self.takes_device_interrupts());
+        [timer, device].into_iter().flatten().min()
     }
 
     /// Fetches, decodes and executes one instruction, with the counter at `now`. With
@@ -700,6 +699,15 @@ impl Cpu {
     /// If the instruction's fetch or one of its data accesses fails translation, the
     /// CPU takes an abort instead, and the next instruction is the abort handler's.
     pub fn step(&mut self, bus: &mut Bus, now: u64, trace: bool) -> Result<Step, Fault> {
+        let step = self.step_once(bus, now, trace);
+        if self.monitor_lost {
+            self.monitor_lost = false;
+            bus.clear_exclusive(self.core);
+        }
+        step
+    }
+
+    fn step_once(&mut self, bus: &mut Bus, now: u64, trace: bool) -> Result<Step, Fault> {
         self.count = now;
         if self.take_pending_irq(bus) {
             if trace {
@@ -1188,6 +1196,35 @@ impl Cpu {
                 let width = if bytes == 8 { Width::W64 } else { Width::W32 };
                 self.store(bus, address, u64::from(bytes), self.read(rt, width))?;
             }
+            // An exclusive load marks its granule in the core's monitor, and the
+            // matching store writes only if nothing has cleared it since (ADR 0031).
+            LoadExclusive { bytes, rt, rn, acquire: _ } => {
+                let address = self.read_sp(rn, Width::W64);
+                if !address.is_multiple_of(u64::from(bytes)) {
+                    return Err(Fault::Unsupported("a misaligned exclusive load").into());
+                }
+                let physical = self.translate(bus, address, Access::Read)?.address;
+                let value = self.load(bus, address, u64::from(bytes))?;
+                bus.mark_exclusive(self.core, physical);
+                self.write(rt, if bytes == 8 { Width::W64 } else { Width::W32 }, value);
+            }
+            StoreExclusive { bytes, rs, rt, rn, release: _ } => {
+                let address = self.read_sp(rn, Width::W64);
+                if !address.is_multiple_of(u64::from(bytes)) {
+                    return Err(Fault::Unsupported("a misaligned exclusive store").into());
+                }
+                let physical = self.translate(bus, address, Access::Write)?.address;
+                let status = if bus.holds_exclusive(self.core, physical) {
+                    let width = if bytes == 8 { Width::W64 } else { Width::W32 };
+                    self.store(bus, address, u64::from(bytes), self.read(rt, width))?;
+                    0
+                } else {
+                    1
+                };
+                bus.clear_exclusive(self.core);
+                self.write(rs, Width::W32, status);
+            }
+            Clrex => bus.clear_exclusive(self.core),
             StrbImmediate { rt, rn, index, offset } => {
                 let (address, writeback) = self.address(rn, index, offset)?;
                 self.store(bus, address, 1, self.read(rt, Width::W32))?;
@@ -1444,6 +1481,31 @@ mod tests {
             tick(&mut cpu, &mut bus).unwrap();
         }
         (cpu, bus)
+    }
+
+    #[test]
+    fn another_cores_store_in_the_granule_fails_an_exclusive_store() {
+        let mut bus = Bus::new(uart());
+        // Core 0: movz x1, #0x1000; ldxr x0, [x1]; stxr w3, x0, [x1]; ldxr x0, [x1];
+        // stxr w3, x0, [x1]. Core 1: movz x1, #0x1008; str xzr, [x1].
+        let first = [0xd2820001u32, 0xc85f7c20, 0xc8037c20, 0xc85f7c20, 0xc8037c20];
+        let second = [0xd2820101u32, 0xf900003f];
+        let bytes =
+            |words: &[u32]| words.iter().flat_map(|word| word.to_le_bytes()).collect::<Vec<_>>();
+        bus.load(0x80000, &bytes(&first)).unwrap();
+        bus.load(0x90000, &bytes(&second)).unwrap();
+        let mut zero = Cpu::new(0x80000, false);
+        let mut one = Cpu::new(0x90000, false);
+        one.core = 1;
+        tick(&mut zero, &mut bus).unwrap();
+        tick(&mut zero, &mut bus).unwrap();
+        tick(&mut one, &mut bus).unwrap();
+        tick(&mut one, &mut bus).unwrap();
+        tick(&mut zero, &mut bus).unwrap();
+        assert_eq!(zero.x[3], 1, "the store 8 bytes away should have cleared the monitor");
+        tick(&mut zero, &mut bus).unwrap();
+        tick(&mut zero, &mut bus).unwrap();
+        assert_eq!(zero.x[3], 0);
     }
 
     #[test]

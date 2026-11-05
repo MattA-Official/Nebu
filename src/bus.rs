@@ -157,7 +157,16 @@ pub struct Bus {
     next_input_poll: u64,
     /// The core's counter, as [`Bus::advance`] last set it.
     now: u64,
+    /// Each core's exclusive monitor: the granule its last exclusive load marked, if
+    /// nothing has cleared it since (ADR 0031).
+    monitors: [Option<u64>; CORES],
 }
+
+/// How many cores share the bus (ADR 0030).
+pub const CORES: usize = 4;
+
+/// The size of the A53's exclusives reservation granule, in bytes (ADR 0031).
+const GRANULE: u64 = 64;
 
 /// How often, in the core's counts, the bus takes input that has arrived for the
 /// UART: about every 65 µs. Taking it more often would slow every instruction down.
@@ -188,6 +197,7 @@ impl Bus {
             power: Power::new(false),
             next_input_poll: 0,
             now: 0,
+            monitors: [None; CORES],
         }
     }
 
@@ -309,6 +319,13 @@ impl Bus {
             return Err(BusError::Unaligned);
         }
         if address < RAM_END {
+            // A store to a granule clears every core's monitor on it (ADR 0031).
+            let granule = address / GRANULE;
+            for monitor in &mut self.monitors {
+                if *monitor == Some(granule) {
+                    *monitor = None;
+                }
+            }
             self.ram.write(address, size, value);
             return Ok(());
         }
@@ -388,9 +405,26 @@ impl Bus {
         }
     }
 
-    /// Records whether core 0's virtual timer is raising its interrupt (ADR 0016).
-    pub fn set_virtual_timer(&mut self, raised: bool) {
-        self.local.set_virtual_timer(raised);
+    /// Records whether `core`'s virtual timer is raising its interrupt (ADRs 0016 and
+    /// 0031).
+    pub fn set_virtual_timer(&mut self, core: u8, raised: bool) {
+        self.local.set_virtual_timer(core, raised);
+    }
+
+    /// Marks the granule holding physical address `address` in `core`'s exclusive
+    /// monitor (ADR 0031).
+    pub fn mark_exclusive(&mut self, core: u8, address: u64) {
+        self.monitors[usize::from(core)] = Some(address / GRANULE);
+    }
+
+    /// Whether `core`'s exclusive monitor still holds the granule of `address`.
+    pub fn holds_exclusive(&self, core: u8, address: u64) -> bool {
+        self.monitors[usize::from(core)] == Some(address / GRANULE)
+    }
+
+    /// Clears `core`'s exclusive monitor.
+    pub fn clear_exclusive(&mut self, core: u8) {
+        self.monitors[usize::from(core)] = None;
     }
 
     /// Moves the devices on to the time when the core's counter reads `ticks`, and
@@ -440,14 +474,14 @@ impl Bus {
         true
     }
 
-    /// Whether core 0 has an IRQ pending.
-    pub fn irq_pending(&self) -> bool {
-        self.local.irq_pending()
+    /// Whether `core` has an IRQ pending.
+    pub fn irq_pending(&self, core: u8) -> bool {
+        self.local.irq_pending(core)
     }
 
-    /// Whether core 0's virtual timer raises an IRQ once it fires.
-    pub fn virtual_timer_routed(&self) -> bool {
-        self.local.virtual_timer_routed()
+    /// Whether `core`'s virtual timer raises an IRQ once it fires.
+    pub fn virtual_timer_routed(&self, core: u8) -> bool {
+        self.local.virtual_timer_routed(core)
     }
 
     /// The core's counter at which the next enabled device interrupt is raised, if
