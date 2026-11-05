@@ -4,14 +4,16 @@
 
 use std::fmt;
 
-use crate::emmc::Emmc;
+use crate::emmc::{Card, Emmc};
 use crate::gpio::Gpio;
 use crate::local::{self, Controller, Local};
 use crate::mailbox::{Mailbox, Request};
 use crate::pl011::Pl011;
+use crate::power::{self, Power};
 use crate::rng::Rng;
 use crate::system_timer::SystemTimer;
 use crate::usb::{self, Dwc2, Memory};
+use crate::usb_devices::Key;
 
 /// RAM occupies the bottom of the address space, up to the peripherals.
 pub const RAM_END: u64 = 0x3F00_0000;
@@ -40,6 +42,8 @@ const EMMC_WINDOW: u64 = 0x100;
 const USB_BASE: u64 = 0x3F98_0000;
 /// The hardware random number generator (ADR 0032).
 const RNG_BASE: u64 = 0x3F10_4000;
+/// The power manager, which holds the watchdog (ADR 0036).
+const POWER_BASE: u64 = 0x3F10_0000;
 /// The size of the other devices' register windows.
 const DEVICE_WINDOW: u64 = 0x1000;
 
@@ -64,6 +68,8 @@ pub enum BusError {
     Emmc(&'static str),
     /// A use of the USB controller or its devices that Nebu does not model.
     Usb(&'static str),
+    /// A use of the power manager that Nebu does not model.
+    Power(&'static str),
 }
 
 impl fmt::Display for BusError {
@@ -78,6 +84,7 @@ impl fmt::Display for BusError {
             BusError::Mailbox(what) => write!(f, "mailbox: not implemented: {what}"),
             BusError::Emmc(what) => write!(f, "EMMC: not implemented: {what}"),
             BusError::Usb(what) => write!(f, "{what}"),
+            BusError::Power(what) => write!(f, "power manager: {what}"),
         }
     }
 }
@@ -145,8 +152,11 @@ pub struct Bus {
     system_timer: SystemTimer,
     emmc: Emmc,
     usb: Dwc2,
+    power: Power,
     /// The core's counter at which to next look for input to the UART.
     next_input_poll: u64,
+    /// The core's counter, as [`Bus::advance`] last set it.
+    now: u64,
     /// Each core's exclusive monitor: the granule its last exclusive load marked, if
     /// nothing has cleared it since (ADR 0031).
     monitors: [Option<u64>; CORES],
@@ -184,9 +194,32 @@ impl Bus {
             system_timer: SystemTimer::default(),
             emmc,
             usb,
+            power: Power::new(false),
             next_input_poll: 0,
+            now: 0,
             monitors: [None; CORES],
         }
+    }
+
+    /// The same bus, its power manager saying the watchdog reset the machine (ADR
+    /// 0036).
+    pub fn after_watchdog(mut self) -> Self {
+        self.power = Power::new(true);
+        self
+    }
+
+    /// The UART and the SD card, to be put in the machine again when it resets
+    /// (ADR 0036): the UART keeps its output and input, and the card what was
+    /// written to it. A keyboard stays plugged in too, with the keys still to be
+    /// typed on it.
+    pub fn into_kept(self) -> (Pl011, Option<Card>, Option<Vec<Key>>) {
+        (self.uart.reset(), self.emmc.into_card(), self.usb.into_keyboard())
+    }
+
+    /// The counter at which the watchdog resets the machine, if it is armed (ADR
+    /// 0036).
+    pub fn watchdog_deadline(&self) -> Option<u64> {
+        self.power.deadline()
     }
 
     /// Copies `bytes` into RAM at `address`, as the firmware does with the kernel image.
@@ -222,6 +255,11 @@ impl Bus {
         match device_at(address) {
             Some((device @ "GPIO", offset)) if size == 4 => self
                 .gpio
+                .read(offset)
+                .map(u64::from)
+                .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "power manager", offset)) if size == 4 => self
+                .power
                 .read(offset)
                 .map(u64::from)
                 .ok_or(BusError::DeviceRegister { device, offset }),
@@ -296,6 +334,20 @@ impl Bus {
                 .gpio
                 .write(offset, value as u32)
                 .ok_or(BusError::DeviceRegister { device, offset }),
+            Some((device @ "power manager", offset)) if size == 4 => {
+                match self.power.write(offset, value as u32, self.now) {
+                    Ok(()) => Ok(()),
+                    Err(power::Refusal::Register) => {
+                        Err(BusError::DeviceRegister { device, offset })
+                    }
+                    Err(power::Refusal::Password) => {
+                        Err(BusError::Power("a write without the password"))
+                    }
+                    Err(power::Refusal::Configuration) => {
+                        Err(BusError::Power("an RSTC configuration other than clear or full reset"))
+                    }
+                }
+            }
             Some((device @ "random number generator", offset)) if size == 4 => self
                 .rng
                 .write(offset, value as u32)
@@ -380,6 +432,7 @@ impl Bus {
     /// [`INPUT_INTERVAL`] ticks it also takes any input that has arrived for the
     /// UART (ADR 0018).
     pub fn advance(&mut self, ticks: u64) {
+        self.now = ticks;
         let mut changed = self.system_timer.advance(ticks);
         changed |= self.usb.advance(ticks);
         if ticks >= self.next_input_poll {
@@ -512,6 +565,9 @@ fn device_at(address: u64) -> Option<(&'static str, u64)> {
     if (USB_BASE..USB_BASE + DEVICE_WINDOW).contains(&address) {
         return Some(("USB", address - USB_BASE));
     }
+    if (POWER_BASE..POWER_BASE + DEVICE_WINDOW).contains(&address) {
+        return Some(("power manager", address - POWER_BASE));
+    }
     if (RNG_BASE..RNG_BASE + DEVICE_WINDOW).contains(&address) {
         return Some(("random number generator", address - RNG_BASE));
     }
@@ -527,6 +583,24 @@ mod tests {
 
     fn bus() -> Bus {
         Bus::new(Pl011::new(Box::new(std::io::sink()), std::sync::mpsc::channel().1))
+    }
+
+    #[test]
+    fn the_watchdog_is_armed_through_the_bus_at_the_time_it_was_written() {
+        let mut bus = bus();
+        bus.advance(1000);
+        bus.write(POWER_BASE + 0x24, 4, 0x5A00_0000 | 10).unwrap();
+        bus.write(POWER_BASE + 0x1C, 4, 0x5A00_0020).unwrap();
+        assert_eq!(bus.watchdog_deadline(), Some(1000 + 10 * power::COUNTS_PER_TICK));
+        assert_eq!(bus.read(POWER_BASE + 0x20, 4), Ok(0x1000));
+        assert_eq!(
+            bus.write(POWER_BASE + 0x1C, 4, 0x20),
+            Err(BusError::Power("a write without the password"))
+        );
+        let reset = bus.after_watchdog();
+        assert_eq!(reset.watchdog_deadline(), None);
+        let mut reset = reset;
+        assert_eq!(reset.read(POWER_BASE + 0x20, 4), Ok(0x1020));
     }
 
     #[test]

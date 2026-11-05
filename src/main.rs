@@ -14,6 +14,7 @@ mod local;
 mod mailbox;
 mod mmu;
 mod pl011;
+mod power;
 mod rng;
 mod system_timer;
 mod usb;
@@ -135,27 +136,28 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let uart = Pl011::new(Box::new(std::io::stdout()), read_stdin());
-    let mut bus = Bus::with_devices(uart, Emmc::new(card), Dwc2::new(keyboard));
-    if let Err(error) = bus.load(LOAD_ADDRESS, &bytes) {
-        eprintln!("nebu: cannot load {image}: {error}");
-        return ExitCode::from(2);
-    }
+    // What the firmware loads: the kernel, and every `--load` file. They are kept,
+    // so that a reset can load them again (ADR 0036).
+    let mut loaded = vec![(image.clone(), LOAD_ADDRESS, bytes)];
     for (path, address) in loads {
-        let loaded = fs::read(&path)
-            .map_err(|error| error.to_string())
-            .and_then(|bytes| bus.load(address, &bytes).map_err(|error| error.to_string()));
-        if let Err(error) = loaded {
-            eprintln!("nebu: cannot load {path} at {address:#x}: {error}");
-            return ExitCode::from(2);
+        match fs::read(&path) {
+            Ok(bytes) => loaded.push((path, address, bytes)),
+            Err(error) => {
+                eprintln!("nebu: cannot load {path} at {address:#x}: {error}");
+                return ExitCode::from(2);
+            }
         }
     }
-    // Core 0 starts at the kernel, as the firmware leaves it; the others wait in the
-    // firmware's stub for the spin table (ADR 0030).
-    let mut cores = vec![Core { cpu: Cpu::new(LOAD_ADDRESS, semihosting), state: State::Running }];
-    for core in 1..CORES {
-        cores.push(Core { cpu: Cpu::in_stub(core, semihosting), state: State::InStub });
-    }
+    let uart = Pl011::new(Box::new(std::io::stdout()), read_stdin());
+    let bus = Bus::with_devices(uart, Emmc::new(card), Dwc2::new(keyboard));
+    let mut bus = match power_on(bus, &loaded) {
+        Ok(bus) => bus,
+        Err(error) => {
+            eprintln!("nebu: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut cores = new_cores(semihosting);
     let mut now = 0;
 
     loop {
@@ -164,6 +166,23 @@ fn main() -> ExitCode {
         // run gives the same result every time.
         now += 1;
         bus.advance(now);
+        if bus.watchdog_deadline().is_some_and(|deadline| now >= deadline) {
+            // The watchdog resets the whole machine: it starts again as from
+            // power-on, with only the SD card and the serial line as they were (ADR
+            // 0036).
+            let (uart, card, keys) = bus.into_kept();
+            let fresh = Bus::with_devices(uart, Emmc::new(card), Dwc2::new(keys));
+            bus = match power_on(fresh.after_watchdog(), &loaded) {
+                Ok(bus) => bus,
+                Err(error) => {
+                    eprintln!("nebu: {error}");
+                    return ExitCode::from(2);
+                }
+            };
+            cores = new_cores(semihosting);
+            now = 0;
+            continue;
+        }
         let mut events = false;
         for core in &mut cores {
             match core.state {
@@ -218,6 +237,7 @@ fn main() -> ExitCode {
             .iter()
             .filter(|core| core.state == State::WaitingForInterrupt)
             .filter_map(|core| core.cpu.next_interrupt(&bus))
+            .chain(bus.watchdog_deadline())
             .min();
         match due {
             // A deadline that has passed is already due.
@@ -239,6 +259,26 @@ fn main() -> ExitCode {
             }
         }
     }
+}
+
+/// Loads `loaded`, each a file's name, an address and the file's bytes, into the
+/// machine's RAM, as the firmware does at power-on and after a reset.
+fn power_on(mut bus: Bus, loaded: &[(String, u64, Vec<u8>)]) -> Result<Bus, String> {
+    for (path, address, bytes) in loaded {
+        bus.load(*address, bytes)
+            .map_err(|error| format!("cannot load {path} at {address:#x}: {error}"))?;
+    }
+    Ok(bus)
+}
+
+/// The cores as the firmware leaves them: core 0 starts at the kernel, and the others
+/// wait in the firmware's stub for the spin table (ADR 0030).
+fn new_cores(semihosting: bool) -> Vec<Core> {
+    let mut cores = vec![Core { cpu: Cpu::new(LOAD_ADDRESS, semihosting), state: State::Running }];
+    for core in 1..CORES {
+        cores.push(Core { cpu: Cpu::in_stub(core, semihosting), state: State::InStub });
+    }
+    cores
 }
 
 /// How many cores the BCM2837 has (ADR 0030).
