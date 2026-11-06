@@ -24,7 +24,7 @@ works live here.
 | 0008 | [Exception levels and exceptions](0008-exception-levels-and-exceptions.md) | Accepted; amended by 0009, 0010 and 0016 |
 | 0009 | [The MMU](0009-the-mmu.md) | Accepted |
 | 0010 | [EL0 and system calls](0010-el0-and-system-calls.md) | Accepted |
-| 0011 | [The firmware mailbox](0011-the-firmware-mailbox.md) | Accepted; amended by 0023 and 0024 |
+| 0011 | [The firmware mailbox](0011-the-firmware-mailbox.md) | Accepted; amended by 0023, 0024 and 0033 |
 | 0012 | [Instructions for capabilities](0012-instructions-for-capabilities.md) | Accepted |
 | 0013 | [SBC](0013-sbc.md) | Accepted |
 | 0014 | [Threads and address spaces](0014-threads-and-address-spaces.md) | Accepted |
@@ -37,15 +37,17 @@ works live here.
 | 0021 | [Widening multiplies](0021-widening-multiplies.md) | Accepted |
 | 0022 | [Loading a second file into memory](0022-loading-a-second-file.md) | Accepted |
 | 0023 | [The framebuffer](0023-the-framebuffer.md) | Accepted |
-| 0024 | [The USB controller, a hub and a keyboard](0024-the-usb-controller-and-keyboard.md) | Accepted |
+| 0024 | [The USB controller, a hub and a keyboard](0024-the-usb-controller-and-keyboard.md) | Accepted; amended by 0033 |
 | 0025 | [Typing on the keyboard](0025-typing-on-the-keyboard.md) | Accepted; amended by 0027 |
 | 0026 | [STRH (register)](0026-strh-register.md) | Accepted |
 | 0027 | [Holding keys](0027-holding-keys.md) | Accepted |
 | 0028 | [Writing to the SD card](0028-writing-to-the-sd-card.md) | Accepted |
 | 0029 | [CSNEG](0029-csneg.md) | Accepted |
 | 0030 | [Four cores](0030-four-cores.md) | Accepted; amended by 0031 |
-| 0031 | [Exclusive loads and stores, and every core's timer](0031-exclusives-and-every-cores-timer.md) | Accepted |
+| 0031 | [Exclusive loads and stores, and every core's timer](0031-exclusives-and-every-cores-timer.md) | Accepted; amended by 0050 |
 | 0032 | [The hardware random number generator](0032-the-random-number-generator.md) | Accepted |
+| 0033 | [A network card, bulk transfers and the board's MAC address](0033-the-network-card-and-bulk-transfers.md) | Proposed |
 | 0036 | [The watchdog, and restarting the machine](0036-the-watchdog-and-restarting.md) | Accepted |
-| 0040 | [DMB](0040-dmb.md) | Proposed |
 | 0041 | [ADDS (extended register)](0041-adds-extended-register.md) | Proposed |
+| 0042 | [DMB, ADC and SMULH](0042-dmb-adc-and-smulh.md) | Proposed |
+| 0050 | [The mailboxes between cores](0050-the-mailboxes-between-cores.md) | Accepted |
