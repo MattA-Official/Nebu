@@ -1154,6 +1154,14 @@ impl Cpu {
                 }
                 self.write(rt, width, value as u8 as i8 as i64 as u64);
             }
+            LdrshImmediate { width, rt, rn, index, offset } => {
+                let (address, writeback) = self.address(rn, index, offset)?;
+                let value = self.load(bus, address, 2)?;
+                if let Some(base) = writeback {
+                    self.write_sp(rn, Width::W64, base);
+                }
+                self.write(rt, width, value as u16 as i16 as i64 as u64);
+            }
             LdrbRegister { rt, rn, rm, extend } => {
                 let address = self.base(rn)?.wrapping_add(self.extend_register(rm, extend));
                 let value = self.load(bus, address, 1)?;
@@ -1723,6 +1731,24 @@ mod tests {
             (cpu.x[0], cpu.x[9], cpu.x[13]) = (0x90000, 3, u64::MAX);
             tick(&mut cpu, &mut bus).unwrap();
             assert_eq!(cpu.x[13], expected);
+        }
+    }
+
+    #[test]
+    fn ldrsh_sign_extends_the_halfword_it_loads() {
+        // ldrsh w8, [x0, #8], ldrsh x8, [x0, #8] and ldursh w8, [x0, #-2].
+        for (instruction, at, expected) in [
+            (0x79c01008u32, 0x90008, 0xFFFF_8001),
+            (0x79801008, 0x90008, u64::MAX - 0x7FFE),
+            (0x78dfe008, 0x8FFFE, 0xFFFF_8001),
+        ] {
+            let mut bus = Bus::new(uart());
+            bus.load(0x80000, &instruction.to_le_bytes()).unwrap();
+            bus.load(at, &[0x01, 0x80]).unwrap();
+            let mut cpu = Cpu::new(0x80000, false);
+            (cpu.x[0], cpu.x[8]) = (0x90000, u64::MAX);
+            tick(&mut cpu, &mut bus).unwrap();
+            assert_eq!(cpu.x[8], expected, "{instruction:#x}");
         }
     }
 
