@@ -1,6 +1,6 @@
 # 0041. ADDS (extended register)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-05
 
 ## Context

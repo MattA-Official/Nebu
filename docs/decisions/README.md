@@ -48,6 +48,6 @@ works live here.
 | 0032 | [The hardware random number generator](0032-the-random-number-generator.md) | Accepted |
 | 0033 | [A network card, bulk transfers and the board's MAC address](0033-the-network-card-and-bulk-transfers.md) | Proposed |
 | 0036 | [The watchdog, and restarting the machine](0036-the-watchdog-and-restarting.md) | Accepted |
-| 0041 | [ADDS (extended register)](0041-adds-extended-register.md) | Proposed |
+| 0041 | [ADDS (extended register)](0041-adds-extended-register.md) | Accepted |
 | 0042 | [DMB, ADC and SMULH](0042-dmb-adc-and-smulh.md) | Proposed |
 | 0050 | [The mailboxes between cores](0050-the-mailboxes-between-cores.md) | Accepted |
