@@ -1,7 +1,8 @@
-//! The USB devices behind the controller: a hub with a keyboard on its first port,
-//! answering as QEMU 8.2's `usb-hub` and `usb-kbd` do (ADR 0024).
+//! The USB devices behind the controller: a hub with a keyboard or a network card
+//! on its first port, answering as QEMU 8.2's `usb-hub`, `usb-kbd` and `usb-net` do
+//! (ADRs 0024 and 0033).
 //!
-//! QEMU puts a full-speed hub of its own between the controller and a keyboard, so
+//! QEMU puts a full-speed hub of its own between the controller and a device, so
 //! Nebu does too. Each device answers the control requests NeOS sends through the
 //! same three stages as QEMU's USB core: a setup packet, data, and status. A request
 //! that changes the device takes effect at the status stage, as SET_ADDRESS must.
@@ -50,6 +51,7 @@ const SET_FEATURE: u8 = 3;
 const SET_ADDRESS: u8 = 5;
 const GET_DESCRIPTOR: u8 = 6;
 const SET_CONFIGURATION: u8 = 9;
+const SET_INTERFACE: u8 = 11;
 const DEVICE: u8 = 1;
 const CONFIGURATION: u8 = 2;
 const HUB: u8 = 0x29;
@@ -239,6 +241,7 @@ impl Port {
 enum Kind {
     Hub { ports: [Port; PORTS] },
     Keyboard(Keyboard),
+    Network(Box<crate::usb_network::Network>),
 }
 
 /// What a keyboard keeps.
@@ -402,8 +405,19 @@ impl Device {
     /// QEMU's hub, with a keyboard on port 1, on which `keys` will be typed.
     pub fn hub_with_keyboard(keys: Vec<Key>) -> Device {
         let keyboard = Keyboard { keys: keys.into(), ..Keyboard::default() };
+        Device::hub_with(Device::new(Kind::Keyboard(keyboard)))
+    }
+
+    /// QEMU's hub, with its network card on port 1, in CDC Ethernet's
+    /// configuration once chosen, on a network like QEMU's user networking.
+    pub fn hub_with_network() -> Device {
+        Device::hub_with(Device::new(Kind::Network(Box::default())))
+    }
+
+    /// QEMU's hub, with `device` on port 1.
+    fn hub_with(device: Device) -> Device {
         let mut ports: [Port; PORTS] = Default::default();
-        ports[0].device = Some(Box::new(Device::new(Kind::Keyboard(keyboard))));
+        ports[0].device = Some(Box::new(device));
         let mut hub = Device::new(Kind::Hub { ports });
         hub.reset();
         hub
@@ -414,6 +428,8 @@ impl Device {
     pub fn into_keys(self) -> Option<Vec<Key>> {
         match self.kind {
             Kind::Keyboard(keyboard) => Some(keyboard.keys.into()),
+            // The network card starts afresh, as QEMU's does.
+            Kind::Network(_) => None,
             Kind::Hub { ports } => {
                 ports.into_iter().find_map(|port| port.device.and_then(|device| device.into_keys()))
             }
@@ -448,6 +464,7 @@ impl Device {
                 let keys = std::mem::take(&mut keyboard.keys);
                 *keyboard = Keyboard { protocol: 1, keys, ..Keyboard::default() };
             }
+            Kind::Network(network) => network.reset(),
         }
     }
 
@@ -471,6 +488,9 @@ impl Device {
     pub fn handle(&mut self, endpoint: u8, token: Token, data: &[u8], room: usize) -> Answer {
         if endpoint == 0 {
             return self.control(token, data, room);
+        }
+        if let Kind::Network(network) = &mut self.kind {
+            return network.handle(endpoint, token, data, room);
         }
         if endpoint != 1 || token != Token::In {
             return Err("a USB transfer to an endpoint the device does not have");
@@ -499,6 +519,7 @@ impl Device {
                 Some(report) => Ok(Reply::sent(report[..room.min(8)].to_vec())),
                 None => Ok(Reply::Nak),
             },
+            Kind::Network(_) => unreachable!("handled above"),
         }
     }
 
@@ -578,6 +599,22 @@ impl Device {
     /// for the host, or `None` for a stall.
     fn request(&mut self, setup: Setup, data: &[u8]) -> Result<Option<Vec<u8>>, &'static str> {
         let [kind, number] = setup.value.to_be_bytes();
+        if let Kind::Network(network) = &mut self.kind {
+            return match (setup.request_type, setup.request) {
+                (0x00, SET_ADDRESS) if setup.value < 128 => {
+                    self.address = setup.value as u8;
+                    Ok(Some(Vec::new()))
+                }
+                (0x00, SET_CONFIGURATION) => {
+                    let taken = network.configure(setup.value)?;
+                    self.configured = network.configured();
+                    Ok(taken.then(Vec::new))
+                }
+                (0x80, GET_DESCRIPTOR) => Ok(network.descriptor(kind, number)),
+                (0x01, SET_INTERFACE) => Ok(network.set_interface(setup.index, setup.value)),
+                _ => network.class_request(setup.request_type, setup.request),
+            };
+        }
         match (setup.request_type, setup.request) {
             (0x80, GET_DESCRIPTOR) => {
                 let descriptor: &[u8] = match (kind, number, &self.kind) {
@@ -600,6 +637,7 @@ impl Device {
             _ => match &mut self.kind {
                 Kind::Hub { ports } => hub_request(ports, setup),
                 Kind::Keyboard(keyboard) => keyboard_request(keyboard, setup, data),
+                Kind::Network(_) => unreachable!("handled above"),
             },
         }
     }

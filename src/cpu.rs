@@ -881,6 +881,11 @@ impl Cpu {
                     u128::from(self.read(rn, Width::W64)) * u128::from(self.read(rm, Width::W64));
                 self.write(rd, Width::W64, (product >> 64) as u64);
             }
+            Smulh { rd, rn, rm } => {
+                let (x, y) = (self.read(rn, Width::W64) as i64, self.read(rm, Width::W64) as i64);
+                let product = i128::from(x) * i128::from(y);
+                self.write(rd, Width::W64, (product >> 64) as u64);
+            }
             Msub { width, rd, rn, rm, ra } => {
                 let product = self.read(rn, width).wrapping_mul(self.read(rm, width));
                 self.write(rd, width, self.read(ra, width).wrapping_sub(product));
@@ -982,6 +987,11 @@ impl Cpu {
                 self.write(rd, width, value);
                 self.flags = flags;
             }
+            Adc { width, rd, rn, rm } => {
+                let (value, _) =
+                    add_with_carry(self.read(rn, width), self.read(rm, width), self.flags.c, width);
+                self.write(rd, width, value);
+            }
             Sbc { width, rd, rn, rm } => {
                 let operand2 = !self.read(rm, width) & width.mask();
                 let (value, _) =
@@ -1051,9 +1061,10 @@ impl Cpu {
                 next = self.take_exception(EC_SVC, u64::from(imm16), pc.wrapping_add(4))?
             }
             Eret => next = self.exception_return()?,
-            // No pipeline, caches or TLB are modelled, so a barrier has nothing to wait
-            // for and there is nothing to invalidate.
-            Nop | Isb | Dsb { .. } => {}
+            // No pipeline, caches or TLB are modelled, and the cores take turns one
+            // instruction at a time, so every access is already in order: a barrier
+            // has nothing to wait for or order, and there is nothing to invalidate.
+            Nop | Isb | Dsb { .. } | Dmb { .. } => {}
             // These are undefined at EL0, as on hardware.
             IcIallu
             | IcIalluis
@@ -1593,6 +1604,48 @@ mod tests {
         (cpu.x[1], cpu.x[2]) = (0xFFFF_FFFF_0000_0001, 3);
         tick(&mut cpu, &mut bus).unwrap();
         assert_eq!(cpu.x[0], 0xFFFF_FFFD);
+    }
+
+    #[test]
+    fn adc_adds_the_carry_and_keeps_the_flags() {
+        // adc x9, x9, x10: the top half of a 128-bit sum (ADR 0042).
+        for (carry, expected) in [(true, 8), (false, 7)] {
+            let mut bus = Bus::new(uart());
+            bus.load(0x80000, &0x9a0a0129u32.to_le_bytes()).unwrap();
+            let mut cpu = Cpu::new(0x80000, false);
+            (cpu.x[9], cpu.x[10]) = (5, 2);
+            cpu.flags = Flags { n: true, z: false, c: carry, v: false };
+            tick(&mut cpu, &mut bus).unwrap();
+            assert_eq!(cpu.x[9], expected);
+            assert_eq!(cpu.flags, Flags { n: true, z: false, c: carry, v: false });
+        }
+        // adc w9, w9, w10: 32 bits wrap, and the upper half is cleared.
+        let mut bus = Bus::new(uart());
+        bus.load(0x80000, &0x1a0a0129u32.to_le_bytes()).unwrap();
+        let mut cpu = Cpu::new(0x80000, false);
+        (cpu.x[9], cpu.x[10]) = (0xFFFF_FFFF_FFFF_FFFF, 1);
+        cpu.flags.c = true;
+        tick(&mut cpu, &mut bus).unwrap();
+        assert_eq!(cpu.x[9], 1);
+    }
+
+    #[test]
+    fn smulh_keeps_the_signed_high_half() {
+        // smulh x9, x0, x9 (ADR 0042).
+        for (x, y, expected) in [
+            (-1i64, 1i64, -1i64),
+            (-2, i64::MAX, -1),
+            (i64::MIN, i64::MIN, 1 << 62),
+            (1 << 40, 1 << 40, 1 << 16),
+            (3, 5, 0),
+        ] {
+            let mut bus = Bus::new(uart());
+            bus.load(0x80000, &0x9b497c09u32.to_le_bytes()).unwrap();
+            let mut cpu = Cpu::new(0x80000, false);
+            (cpu.x[0], cpu.x[9]) = (x as u64, y as u64);
+            tick(&mut cpu, &mut bus).unwrap();
+            assert_eq!(cpu.x[9] as i64, expected, "{x} * {y}");
+        }
     }
 
     #[test]

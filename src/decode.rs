@@ -305,6 +305,8 @@ pub enum Instruction {
     /// `rm` 31 is the zero register. `option` is the field's value: UXTB, UXTH,
     /// UXTW, UXTX, then SXTB, SXTH, SXTW, SXTX.
     SubsExtendedRegister { width: Width, rd: u8, rn: u8, rm: u8, option: u8, amount: u8 },
+    /// ADC: `rd = rn + rm + C`. 31 is the zero register (ADR 0042).
+    Adc { width: Width, rd: u8, rn: u8, rm: u8 },
     /// SBC: `rd = rn - rm - (1 - C)`. 31 is the zero register.
     Sbc { width: Width, rd: u8, rn: u8, rm: u8 },
     /// SBCS: `rd = rn - rm - (1 - C)`, setting the flags. 31 is the zero register.
@@ -338,6 +340,9 @@ pub enum Instruction {
     /// UMULH: `rd` = the high 64 bits of the 128-bit product `rn * rm`, unsigned. 31
     /// is the zero register.
     Umulh { rd: u8, rn: u8, rm: u8 },
+    /// SMULH: `rd` = the high 64 bits of the 128-bit product `rn * rm`, signed. 31
+    /// is the zero register (ADR 0042).
+    Smulh { rd: u8, rn: u8, rm: u8 },
     /// MSUB: `rd = ra - rn * rm`, keeping the low bits. 31 is the zero register.
     Msub { width: Width, rd: u8, rn: u8, rm: u8, ra: u8 },
     /// SMADDL, SMSUBL, UMADDL and UMSUBL: `rd = ra + rn * rm`, or `ra - rn * rm` if
@@ -405,6 +410,9 @@ pub enum Instruction {
     /// DSB: data synchronisation barrier. `option` is the CRm field, naming which
     /// accesses it waits for.
     Dsb { option: u8 },
+    /// DMB: data memory barrier. `option` is the CRm field, naming which accesses it
+    /// orders (ADR 0042).
+    Dmb { option: u8 },
     /// IC IALLU: invalidate the whole instruction cache.
     IcIallu,
     /// IC IALLUIS: IC IALLU on every core (ADR 0030).
@@ -801,6 +809,7 @@ fn system(word: u32) -> Result<Instruction, DecodeError> {
             // CRm 0b0000 and 0b0100 with DSB's op2 are SSBB and PSSBB instead.
             (0b100, 0b0000 | 0b0100) => Err(DecodeError::Unimplemented),
             (0b100, option) => Ok(Instruction::Dsb { option }),
+            (0b101, option) => Ok(Instruction::Dmb { option }),
             (0b110, _) => Ok(Instruction::Isb),
             // CLREX, with any CRm.
             (0b010, _) => Ok(Instruction::Clrex),
@@ -1053,6 +1062,9 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
             (0b00, 0b110, 0) if width == Width::W64 && bits(word, 14, 10) == 31 => {
                 Ok(Instruction::Umulh { rd: reg(word, 0), rn: reg(word, 5), rm: reg(word, 16) })
             }
+            (0b00, 0b010, 0) if width == Width::W64 && bits(word, 14, 10) == 31 => {
+                Ok(Instruction::Smulh { rd: reg(word, 0), rn: reg(word, 5), rm: reg(word, 16) })
+            }
             (0b00, 0b000, 1) => Ok(Instruction::Msub {
                 width,
                 rd: reg(word, 0),
@@ -1136,14 +1148,15 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
         };
     }
 
-    // Add/subtract (with carry). Only SBC and SBCS (op = 1).
+    // Add/subtract (with carry). ADC, SBC and SBCS.
     if bits(word, 28, 21) == 0b1101_0000 && bits(word, 15, 10) == 0 {
         let width = Width::from_bit(bits(word, 31, 31));
         let (rd, rn, rm) = (reg(word, 0), reg(word, 5), reg(word, 16));
         return match bits(word, 30, 29) {
+            0b00 => Ok(Instruction::Adc { width, rd, rn, rm }),
             0b10 => Ok(Instruction::Sbc { width, rd, rn, rm }),
             0b11 => Ok(Instruction::Sbcs { width, rd, rn, rm }),
-            _ => Err(DecodeError::Unimplemented), // ADC, ADCS
+            _ => Err(DecodeError::Unimplemented), // ADCS
         };
     }
 
@@ -1443,6 +1456,9 @@ impl fmt::Display for Instruction {
                 sp(rn, width),
                 Extended { rm, option, amount }
             ),
+            Adc { width, rd, rn, rm } => {
+                write!(f, "adc {}, {}, {}", zr(rd, width), zr(rn, width), zr(rm, width))
+            }
             Sbc { width, rd, rn, rm } => {
                 write!(f, "sbc {}, {}, {}", zr(rd, width), zr(rn, width), zr(rm, width))
             }
@@ -1505,6 +1521,13 @@ impl fmt::Display for Instruction {
             Umulh { rd, rn, rm } => write!(
                 f,
                 "umulh {}, {}, {}",
+                zr(rd, Width::W64),
+                zr(rn, Width::W64),
+                zr(rm, Width::W64)
+            ),
+            Smulh { rd, rn, rm } => write!(
+                f,
+                "smulh {}, {}, {}",
                 zr(rd, Width::W64),
                 zr(rn, Width::W64),
                 zr(rm, Width::W64)
@@ -1602,6 +1625,10 @@ impl fmt::Display for Instruction {
             Dsb { option } => match BARRIER_OPTIONS[usize::from(option)] {
                 "" => write!(f, "dsb #{option}"),
                 name => write!(f, "dsb {name}"),
+            },
+            Dmb { option } => match BARRIER_OPTIONS[usize::from(option)] {
+                "" => write!(f, "dmb #{option}"),
+                name => write!(f, "dmb {name}"),
             },
             IcIallu => write!(f, "ic iallu"),
             IcIalluis => write!(f, "ic ialluis"),
@@ -1881,6 +1908,9 @@ mod tests {
             (0x58000382, LdrLiteral { width: W64, rt: 2, offset: 0x70 }),
             (0xd61f0020, Br { rn: 1 }),
             (0xd5033f9f, Dsb { option: 0b1111 }),
+            // NeOS's time frame, read with acquire loads (NeOS ADR 0081).
+            (0xd50339bf, Dmb { option: 0b1001 }),
+            (0xd5033bbf, Dmb { option: 0b1011 }),
             (0xd508751f, IcIallu),
             (0x3100043f, AddsImmediate { width: W32, rd: 31, rn: 1, imm: 1 }),
             (0x1280001b, Movn { width: W32, rd: 27, imm16: 0, shift: 0 }),
@@ -1995,6 +2025,7 @@ mod tests {
                 },
             ),
             (0x9bc97c29, Umulh { rd: 9, rn: 1, rm: 9 }),
+            (0x9b497c09, Smulh { rd: 9, rn: 0, rm: 9 }),
             (0x1b09d108, Msub { width: W32, rd: 8, rn: 8, rm: 9, ra: 20 }),
             // The file system: `umull x11, w24, w19`, which is UMADDL with the zero
             // register, and the other three forms.
@@ -2012,6 +2043,8 @@ mod tests {
             ),
             (0xfa1f01ad, Sbcs { width: W64, rd: 13, rn: 13, rm: 31 }),
             (0xda1f0130, Sbc { width: W64, rd: 16, rn: 9, rm: 31 }),
+            (0x9a0a0129, Adc { width: W64, rd: 9, rn: 9, rm: 10 }),
+            (0x1a0a0129, Adc { width: W32, rd: 9, rn: 9, rm: 10 }),
             // Stage 5a: threads.
             (
                 0x8b30212e,

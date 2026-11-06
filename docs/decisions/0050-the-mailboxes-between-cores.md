@@ -1,6 +1,6 @@
 # 0050. The mailboxes between cores
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-05
 - **Amends:** [0031](0031-exclusives-and-every-cores-timer.md) (decision 3, mailbox
   interrupts stay off)
