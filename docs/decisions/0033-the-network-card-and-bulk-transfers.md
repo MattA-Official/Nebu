@@ -1,6 +1,6 @@
 # 0033. A network card, bulk transfers and the board's MAC address
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-05
 - **Amends:** [0011](0011-the-firmware-mailbox.md), decision 3 (which tags are
   answered), and [0024](0024-the-usb-controller-and-keyboard.md) (bulk transfers,
