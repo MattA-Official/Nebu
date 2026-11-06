@@ -296,6 +296,10 @@ pub enum Instruction {
     /// `amount`)`. `rd` and `rn` 31 are SP, `rm` 31 is the zero register. `option` is
     /// as for SUBS.
     AddExtendedRegister { width: Width, rd: u8, rn: u8, rm: u8, option: u8, amount: u8 },
+    /// ADDS (extended register): `rd = rn + (rm extended by `option`, shifted left
+    /// by `amount`)`, setting the flags. `rd` 31 is the zero register, `rn` 31 is SP,
+    /// `rm` 31 is the zero register. `option` is as for SUBS.
+    AddsExtendedRegister { width: Width, rd: u8, rn: u8, rm: u8, option: u8, amount: u8 },
     /// SUB (extended register): `rd = rn - (rm extended by `option`, shifted left by
     /// `amount`)`. `rd` and `rn` 31 are SP, `rm` 31 is the zero register. `option` is
     /// as for SUBS.
@@ -1132,7 +1136,7 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
         };
     }
 
-    // Add/subtract (extended register). Only ADD, SUB and SUBS.
+    // Add/subtract (extended register).
     if bits(word, 28, 21) == 0b0101_1001 {
         let width = Width::from_bit(bits(word, 31, 31));
         let (option, amount) = (bits(word, 15, 13) as u8, bits(word, 12, 10) as u8);
@@ -1142,9 +1146,9 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
         let (rd, rn, rm) = (reg(word, 0), reg(word, 5), reg(word, 16));
         return match bits(word, 30, 29) {
             0b00 => Ok(Instruction::AddExtendedRegister { width, rd, rn, rm, option, amount }),
+            0b01 => Ok(Instruction::AddsExtendedRegister { width, rd, rn, rm, option, amount }),
             0b10 => Ok(Instruction::SubExtendedRegister { width, rd, rn, rm, option, amount }),
-            0b11 => Ok(Instruction::SubsExtendedRegister { width, rd, rn, rm, option, amount }),
-            _ => Err(DecodeError::Unimplemented), // ADDS
+            _ => Ok(Instruction::SubsExtendedRegister { width, rd, rn, rm, option, amount }),
         };
     }
 
@@ -1439,6 +1443,13 @@ impl fmt::Display for Instruction {
                 f,
                 "add {}, {}, {}",
                 sp(rd, width),
+                sp(rn, width),
+                Extended { rm, option, amount }
+            ),
+            AddsExtendedRegister { width, rd, rn, rm, option, amount } => write!(
+                f,
+                "adds {}, {}, {}",
+                zr(rd, width),
                 sp(rn, width),
                 Extended { rm, option, amount }
             ),
@@ -2049,6 +2060,11 @@ mod tests {
             (
                 0x8b30212e,
                 AddExtendedRegister { width: W64, rd: 14, rn: 9, rm: 16, option: 1, amount: 0 },
+            ),
+            // ADR 0041: NeOS's process test.
+            (
+                0xab2ac129,
+                AddsExtendedRegister { width: W64, rd: 9, rn: 9, rm: 10, option: 6, amount: 0 },
             ),
             // NeOS ADR 0033: the vector table's stack check.
             (0xd518d080, Msr { register: SystemRegister::TpidrEl1, rt: 0 }),
