@@ -957,6 +957,17 @@ impl Cpu {
                 let value = self.read(rn, width).reverse_bits() >> (64 - width.bits());
                 self.write(rd, width, value);
             }
+            Rev { width, rd, rn, container } => {
+                let value = self.read(rn, width);
+                let bits = u32::from(container) * 8;
+                let mask = u64::MAX >> (64 - bits);
+                let mut result = 0;
+                for shift in (0..width.bits()).step_by(bits as usize) {
+                    let part = (value >> shift) & mask;
+                    result |= (part.swap_bytes() >> (64 - bits)) << shift;
+                }
+                self.write(rd, width, result);
+            }
             Clz { width, rd, rn } => {
                 let value = self.read(rn, width).leading_zeros() - (64 - width.bits());
                 self.write(rd, width, u64::from(value));
@@ -1731,6 +1742,24 @@ mod tests {
             (cpu.x[0], cpu.x[9], cpu.x[13]) = (0x90000, 3, u64::MAX);
             tick(&mut cpu, &mut bus).unwrap();
             assert_eq!(cpu.x[13], expected);
+        }
+    }
+
+    #[test]
+    fn rev_reverses_the_bytes_in_each_container() {
+        // rev x8, x8; rev32 x8, x8; rev16 x8, x8; rev w8, w8.
+        for (instruction, expected) in [
+            (0xdac00d08u32, 0x0807_0605_0403_0201),
+            (0xdac00908, 0x0403_0201_0807_0605),
+            (0xdac00508, 0x0201_0403_0605_0807),
+            (0x5ac00908, 0x0000_0000_0807_0605),
+        ] {
+            let mut bus = Bus::new(uart());
+            bus.load(0x80000, &instruction.to_le_bytes()).unwrap();
+            let mut cpu = Cpu::new(0x80000, false);
+            cpu.x[8] = 0x0102_0304_0506_0708;
+            tick(&mut cpu, &mut bus).unwrap();
+            assert_eq!(cpu.x[8], expected, "{instruction:#x}");
         }
     }
 

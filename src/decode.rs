@@ -289,6 +289,9 @@ pub enum Instruction {
     Rbit { width: Width, rd: u8, rn: u8 },
     /// CLZ: `rd` = the number of leading zero bits in `rn`. 31 is the zero register.
     Clz { width: Width, rd: u8, rn: u8 },
+    /// REV16, REV32 and REV: `rd` = `rn` with the order of the bytes reversed in each
+    /// `container` of 2, 4 or 8 bytes. 31 is the zero register.
+    Rev { width: Width, rd: u8, rn: u8, container: u8 },
     /// EXTR: the `width` bits of `rn:rm` starting at bit `lsb`. 31 is the zero
     /// register.
     Extr { width: Width, rd: u8, rn: u8, rm: u8, lsb: u8 },
@@ -1181,12 +1184,17 @@ fn data_processing_register(word: u32) -> Result<Instruction, DecodeError> {
         };
     }
 
-    // Data-processing (1 source). Only RBIT and CLZ.
+    // Data-processing (1 source). RBIT, REV16, REV32, REV and CLZ.
     if bits(word, 30, 21) == 0b10_1101_0110 && bits(word, 20, 16) == 0 {
         let width = Width::from_bit(bits(word, 31, 31));
         let (rd, rn) = (reg(word, 0), reg(word, 5));
         return match bits(word, 15, 10) {
             0b00_0000 => Ok(Instruction::Rbit { width, rd, rn }),
+            0b00_0001 => Ok(Instruction::Rev { width, rd, rn, container: 2 }),
+            0b00_0010 => Ok(Instruction::Rev { width, rd, rn, container: 4 }),
+            0b00_0011 if width == Width::W64 => {
+                Ok(Instruction::Rev { width, rd, rn, container: 8 })
+            }
             0b00_0100 => Ok(Instruction::Clz { width, rd, rn }),
             _ => Err(DecodeError::Unimplemented),
         };
@@ -1453,6 +1461,14 @@ impl fmt::Display for Instruction {
                 write!(f, "udiv {}, {}, {}", zr(rd, width), zr(rn, width), zr(rm, width))
             }
             Clz { width, rd, rn } => write!(f, "clz {}, {}", zr(rd, width), zr(rn, width)),
+            Rev { width, rd, rn, container } => {
+                let name = match (container, width) {
+                    (2, _) => "rev16",
+                    (4, Width::W64) => "rev32",
+                    _ => "rev",
+                };
+                write!(f, "{name} {}, {}", zr(rd, width), zr(rn, width))
+            }
             Extr { width, rd, rn, rm, lsb } => {
                 write!(f, "extr {}, {}, {}, #{lsb}", zr(rd, width), zr(rn, width), zr(rm, width))
             }
@@ -2044,6 +2060,10 @@ mod tests {
             ),
             (0xdac00309, Rbit { width: W64, rd: 9, rn: 24 }),
             (0xdac01129, Clz { width: W64, rd: 9, rn: 9 }),
+            (0xdac00d08, Rev { width: W64, rd: 8, rn: 8, container: 8 }),
+            (0x5ac00908, Rev { width: W32, rd: 8, rn: 8, container: 4 }),
+            (0xdac00908, Rev { width: W64, rd: 8, rn: 8, container: 4 }),
+            (0x5ac00508, Rev { width: W32, rd: 8, rn: 8, container: 2 }),
             (
                 0x6a37035f,
                 BicsShiftedRegister {
