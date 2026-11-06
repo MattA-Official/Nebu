@@ -2,11 +2,12 @@
 //! BCM2835 interrupt controller, which gathers the devices' interrupts into one line
 //! (ADRs 0016 and 0017).
 //!
-//! Nebu models every core's virtual timer interrupt (ADR 0031), the BCM2835 line
+//! Nebu models every core's virtual timer interrupt (ADR 0031), mailbox 0 of every
+//! core as an IRQ (ADR 0050), the BCM2835 line
 //! routed to core 0 as an IRQ, and on that line the system timer's comparators 1 and 3, the PL011
 //! UART's interrupt, 57 (ADR 0018), the EMMC controller's, 62 (ADR 0019), and the USB
 //! controller's, 9 (ADR 0024). Every other source must stay off: the local
-//! timer, every core's mailbox interrupts, the FIQ, and every other device interrupt,
+//! timer, mailboxes 1 to 3, the FIQ, and every other device interrupt,
 //! which Nebu never raises.
 
 /// The local block's registers that NeOS uses: the local timer's control, then core
@@ -18,12 +19,20 @@ const LOCAL_TIMER_CONTROL: u64 = 0x34;
 const CORE0_TIMER_INTERRUPTS: u64 = 0x40;
 const CORE0_MAILBOX_INTERRUPTS: u64 = 0x50;
 const CORE0_IRQ_SOURCE: u64 = 0x60;
+/// Core 0's mailbox 0 write-set register, and its read and write-clear register; each
+/// core's are 16 bytes after the last's (ADR 0050).
+const CORE0_MAILBOX0_SET: u64 = 0x80;
+const CORE0_MAILBOX0_CLEAR: u64 = 0xC0;
 /// How many cores the local block serves.
 const CORES: usize = 4;
 /// The virtual timer's bit, in both the timer interrupt control and the IRQ source.
 const VIRTUAL_TIMER: u32 = 1 << 3;
 /// The BCM2835 line's bit in the IRQ source.
 const GPU: u32 = 1 << 8;
+/// Mailbox 0's bit in the mailbox interrupt control, as an IRQ.
+const MAILBOX0_IRQ: u32 = 1 << 0;
+/// Mailbox 0's bit in the IRQ source.
+const MAILBOX0: u32 = 1 << 4;
 
 /// The BCM2835 controller's registers, as offsets from its base at 0x3F00_B200:
 /// interrupts 0 to 31 and 32 to 63 that are raised, the FIQ's control, then
@@ -42,6 +51,10 @@ const DISABLE_BASIC_IRQS: u64 = 0x24;
 pub struct Local {
     /// Each core's timer interrupt control: which of its timers may raise an IRQ.
     timer_interrupts: [u32; CORES],
+    /// Each core's mailbox interrupt control: whether its mailbox 0 raises an IRQ.
+    mailbox_interrupts: [u32; CORES],
+    /// Each core's mailbox 0.
+    mailboxes: [u32; CORES],
     /// Whether each core's virtual timer is raising its interrupt, as the CPU says.
     virtual_timer: [bool; CORES],
     /// Whether the BCM2835 line is raised.
@@ -50,8 +63,15 @@ pub struct Local {
 
 /// Which core's register `offset` is, if it is one of the four at `base`.
 fn core_register(offset: u64, base: u64) -> Option<usize> {
+    core_register_every(offset, base, 4)
+}
+
+/// Which core's register `offset` is, if it is one of the four at `base`, each
+/// `stride` bytes after the last.
+fn core_register_every(offset: u64, base: u64, stride: u64) -> Option<usize> {
     let index = offset.checked_sub(base)?;
-    (index.is_multiple_of(4) && index / 4 < CORES as u64).then_some(index as usize / 4)
+    (index.is_multiple_of(stride) && index / stride < CORES as u64)
+        .then_some((index / stride) as usize)
 }
 
 impl Local {
@@ -60,11 +80,17 @@ impl Local {
         if let Some(core) = core_register(offset, CORE0_TIMER_INTERRUPTS) {
             return Some(self.timer_interrupts[core]);
         }
+        if let Some(core) = core_register(offset, CORE0_MAILBOX_INTERRUPTS) {
+            return Some(self.mailbox_interrupts[core]);
+        }
+        if let Some(core) = core_register_every(offset, CORE0_MAILBOX0_CLEAR, 16) {
+            return Some(self.mailboxes[core]);
+        }
         core_register(offset, CORE0_IRQ_SOURCE).map(|core| self.pending(core))
     }
 
     /// Writes the register at `offset`, if Nebu implements it and the value turns on
-    /// nothing but a virtual timer's interrupt.
+    /// nothing but a virtual timer's interrupt or a mailbox 0's IRQ.
     pub fn write(&mut self, offset: u64, value: u32) -> Option<()> {
         if let Some(core) = core_register(offset, CORE0_TIMER_INTERRUPTS) {
             if value != 0 && value != VIRTUAL_TIMER {
@@ -73,8 +99,22 @@ impl Local {
             self.timer_interrupts[core] = value;
             return Some(());
         }
-        let mailbox = core_register(offset, CORE0_MAILBOX_INTERRUPTS).is_some();
-        let off = mailbox || matches!(offset, GPU_ROUTING | LOCAL_TIMER_CONTROL);
+        if let Some(core) = core_register(offset, CORE0_MAILBOX_INTERRUPTS) {
+            if value != 0 && value != MAILBOX0_IRQ {
+                return None;
+            }
+            self.mailbox_interrupts[core] = value;
+            return Some(());
+        }
+        if let Some(core) = core_register_every(offset, CORE0_MAILBOX0_SET, 16) {
+            self.mailboxes[core] |= value;
+            return Some(());
+        }
+        if let Some(core) = core_register_every(offset, CORE0_MAILBOX0_CLEAR, 16) {
+            self.mailboxes[core] &= !value;
+            return Some(());
+        }
+        let off = matches!(offset, GPU_ROUTING | LOCAL_TIMER_CONTROL);
         (off && value == 0).then_some(())
     }
 
@@ -98,7 +138,9 @@ impl Local {
     fn pending(&self, core: usize) -> u32 {
         let timer =
             if self.virtual_timer[core] { self.timer_interrupts[core] & VIRTUAL_TIMER } else { 0 };
-        timer | if self.gpu && core == 0 { GPU } else { 0 }
+        let mailbox =
+            self.mailbox_interrupts[core] & MAILBOX0_IRQ != 0 && self.mailboxes[core] != 0;
+        timer | if self.gpu && core == 0 { GPU } else { 0 } | if mailbox { MAILBOX0 } else { 0 }
     }
 
     /// Whether `core` has an IRQ pending.
@@ -198,14 +240,34 @@ mod tests {
         let mut local = Local::default();
         assert_eq!(local.write(CORE0_TIMER_INTERRUPTS, 1 << 1), None);
         assert_eq!(local.write(LOCAL_TIMER_CONTROL, 1 << 28), None);
-        assert_eq!(local.write(CORE0_MAILBOX_INTERRUPTS, 1), None);
-        assert_eq!(local.write(CORE0_MAILBOX_INTERRUPTS + 4, 1), None);
+        assert_eq!(local.write(CORE0_MAILBOX_INTERRUPTS, 1 << 1), None);
+        assert_eq!(local.write(CORE0_MAILBOX_INTERRUPTS + 4, 1 << 4), None);
+        assert_eq!(local.write(CORE0_MAILBOX0_SET + 4, 1), None);
+        assert_eq!(local.write(CORE0_MAILBOX0_CLEAR + 12, 1), None);
+        assert_eq!(local.read(CORE0_MAILBOX0_SET), None);
         assert_eq!(local.write(GPU_ROUTING, 4), None);
         let mut controller = Controller::default();
         assert_eq!(controller.write(ENABLE_IRQS_1, 1), None);
         assert_eq!(controller.write(ENABLE_IRQS_2, 1), None);
         assert_eq!(controller.write(FIQ_CONTROL, 0x80), None);
         assert_eq!(controller.write(DISABLE_IRQS_1, u32::MAX), Some(()));
+    }
+
+    #[test]
+    fn raises_a_mailbox_only_on_its_core_and_while_enabled() {
+        let mut local = Local::default();
+        local.write(CORE0_MAILBOX0_SET + 2 * 16, 0b11).unwrap();
+        assert_eq!(local.read(CORE0_MAILBOX0_CLEAR + 2 * 16), Some(0b11));
+        assert!(!local.irq_pending(2));
+        local.write(CORE0_MAILBOX_INTERRUPTS + 8, MAILBOX0_IRQ).unwrap();
+        assert_eq!(local.read(CORE0_IRQ_SOURCE + 8), Some(MAILBOX0));
+        assert!(local.irq_pending(2) && !local.irq_pending(0) && !local.irq_pending(3));
+        local.write(CORE0_MAILBOX0_CLEAR + 2 * 16, 0b01).unwrap();
+        assert_eq!(local.read(CORE0_MAILBOX0_CLEAR + 2 * 16), Some(0b10));
+        assert!(local.irq_pending(2));
+        local.write(CORE0_MAILBOX0_CLEAR + 2 * 16, 0b10).unwrap();
+        assert!(!local.irq_pending(2));
+        assert_eq!(local.read(CORE0_MAILBOX0_CLEAR + 4 * 16), None);
     }
 
     #[test]
