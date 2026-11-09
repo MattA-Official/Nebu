@@ -8,11 +8,13 @@
 //! packet, and come in the same way, one at a time, with a zero-length packet after
 //! a frame that fills its last packet, as QEMU's `hw/usb/dev-network.c` does. The
 //! network behind it is the gateway, 10.0.2.2, and the name server, 10.0.2.3, which
-//! answer ARP requests as slirp does, with a 64-byte frame. Anything else sent halts
-//! Nebu, as do RNDIS and the card's notifications, which NeOS does not use.
+//! answer ARP requests as slirp does, with a 64-byte frame; and slirp's IPv6, as
+//! `slirp6` models it (ADR 0034). Anything else sent halts Nebu, as do RNDIS and the
+//! card's notifications, which NeOS does not use.
 
 use std::collections::VecDeque;
 
+use crate::slirp6::{self, Slirp6};
 use crate::usb_devices::{Answer, Reply, Token};
 
 /// The address `cargo xtask` gives QEMU's card, and the one QEMU puts in its MAC
@@ -104,6 +106,8 @@ pub struct Network {
     /// The frames the network has sent that the card has not taken yet, oldest
     /// first, as slirp keeps them while the card's buffer is full.
     queue: VecDeque<Vec<u8>>,
+    /// The IPv6 side of the network (ADR 0034).
+    ipv6: Slirp6,
 }
 
 impl Network {
@@ -224,14 +228,20 @@ impl Network {
         Ok(Reply::Ack { actual: data.len(), data: Vec::new() })
     }
 
-    /// The network's answer to a frame: an ARP request for the gateway or the name
-    /// server is answered, as slirp answers it; other ARP is ignored, as slirp
-    /// ignores it; anything else halts Nebu.
+    /// The network's answer to a frame: IPv6 is answered as slirp answers it (ADR
+    /// 0034); an ARP request for the gateway or the name server is answered, as slirp
+    /// answers it; other ARP is ignored, as slirp ignores it; anything else halts
+    /// Nebu.
     fn send(&mut self, frame: &[u8]) -> Result<(), &'static str> {
+        if frame.len() >= 14 && frame[12..14] == slirp6::ETHER_TYPE {
+            let answers = self.ipv6.frame(frame)?;
+            self.queue.extend(answers);
+            self.take_next();
+            return Ok(());
+        }
         if frame.len() < 42 || frame[12..14] != ARP {
-            return Err(
-                "USB: a frame other than ARP sent to Nebu's network, which it does not model",
-            );
+            return Err("USB: a frame other than ARP or IPv6 sent to Nebu's network, which it \
+                        does not model");
         }
         if frame[14..20] != ARP_ETHERNET_IPV4 || frame[21] != ARP_REQUEST {
             return Ok(());

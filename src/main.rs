@@ -16,6 +16,7 @@ mod mmu;
 mod pl011;
 mod power;
 mod rng;
+mod slirp6;
 mod system_timer;
 mod usb;
 mod usb_devices;
@@ -63,8 +64,9 @@ usage: nebu [--semihosting] [--trace] [--sd <card.img>] [--load <file>@<address>
                  +shift,+h,-h,-shift; ~N holds the keys as they are for the next N
                  times it asks
   --network      plug a USB network card into the USB port, behind a hub, on a
-                 network whose gateway answers ARP, as QEMU's -device usb-net with
-                 -netdev user does; not with a keyboard";
+                 network whose gateway answers ARP and IPv6's Neighbour Discovery
+                 and pings, as QEMU's -device usb-net with -netdev user does; not
+                 with a keyboard";
 
 fn main() -> ExitCode {
     let mut semihosting = false;
