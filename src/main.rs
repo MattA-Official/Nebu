@@ -177,6 +177,13 @@ fn main() -> ExitCode {
         // run gives the same result every time.
         now += 1;
         bus.advance(now);
+        if bus.watchdog_deadline().is_some_and(|deadline| now >= deadline) && bus.halts_on_reset() {
+            // The firmware would stay halted, as NeOS's shutdown asks, so the run
+            // ends, as QEMU's does (ADR 0045).
+            save_screen(&bus, screen.as_deref());
+            eprintln!("nebu: the machine halted");
+            return ExitCode::SUCCESS;
+        }
         if bus.watchdog_deadline().is_some_and(|deadline| now >= deadline) {
             // The watchdog resets the whole machine: it starts again as from
             // power-on, with only the SD card and the serial line as they were (ADR
