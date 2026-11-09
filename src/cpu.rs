@@ -1370,7 +1370,7 @@ impl Cpu {
         }
     }
 
-    /// The second operand of ADD and SUBS (extended register): `rm` extended by
+    /// The second operand of ADD, ADDS, SUB and SUBS (extended register): `rm` extended by
     /// `option`, shifted left by `amount`.
     fn extended(&self, rm: u8, option: u8, amount: u8, width: Width) -> u64 {
         let value = self.read(rm, Width::W64);
@@ -1617,6 +1617,18 @@ mod tests {
         let mut cpu = Cpu::new(0x80000, false);
         cpu.x[5] = 0xFFFF_FFFF;
         tick(&mut cpu, &mut bus).unwrap();
+        assert_eq!(cpu.flags, Flags { n: false, z: true, c: true, v: false });
+    }
+
+    #[test]
+    fn adds_extended_sign_extends_and_sets_the_flags() {
+        // adds x9, x9, w10, sxtw: w10 = -1 sign-extends, so 1 + -1 is zero with a carry.
+        let mut bus = Bus::new(uart());
+        bus.load(0x80000, &0xab2ac129u32.to_le_bytes()).unwrap();
+        let mut cpu = Cpu::new(0x80000, false);
+        (cpu.x[9], cpu.x[10]) = (1, 0x1234_5678_FFFF_FFFF);
+        tick(&mut cpu, &mut bus).unwrap();
+        assert_eq!(cpu.x[9], 0);
         assert_eq!(cpu.flags, Flags { n: false, z: true, c: true, v: false });
     }
 

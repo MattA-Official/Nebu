@@ -1,6 +1,6 @@
 # 0043. REV, ADDS (extended register) and LDRSW (immediate)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-05
 
 ## Context
@@ -38,7 +38,8 @@ ordinary Rust, and each completes a group Nebu half has.
    32-bit or whole-register piece. The 32-bit form with REV's 64-bit opcode is left
    unallocated, as the architecture has it.
 2. ADDS (extended register) is decoded beside ADD, SUB and SUBS, and sets the flags
-   as ADDS (shifted register) does.
+   as ADDS (shifted register) does. ADR 0041 brought the same instruction to `main`
+   first, for the process model; this decision and that one are one implementation.
 3. LDRSW (immediate) is decoded in its unsigned offset, pre-index and post-index
    forms, and LDURSW with the other unscaled loads.
 
