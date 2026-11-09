@@ -50,4 +50,5 @@ works live here.
 | 0036 | [The watchdog, and restarting the machine](0036-the-watchdog-and-restarting.md) | Accepted |
 | 0041 | [ADDS (extended register)](0041-adds-extended-register.md) | Accepted |
 | 0042 | [DMB, ADC and SMULH](0042-dmb-adc-and-smulh.md) | Proposed |
+| 0043 | [REV, ADDS (extended register) and LDRSW (immediate)](0043-rev-adds-and-ldrsw.md) | Accepted |
 | 0050 | [The mailboxes between cores](0050-the-mailboxes-between-cores.md) | Accepted |

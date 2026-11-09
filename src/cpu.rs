@@ -961,6 +961,27 @@ impl Cpu {
                 let value = self.read(rn, width).leading_zeros() - (64 - width.bits());
                 self.write(rd, width, u64::from(value));
             }
+            Rev { width, rd, rn, container } => {
+                let value = self.read(rn, width);
+                let reversed = match container {
+                    16 => {
+                        let bytes = value.to_le_bytes();
+                        let mut out = [0; 8];
+                        for pair in 0..4 {
+                            out[2 * pair] = bytes[2 * pair + 1];
+                            out[2 * pair + 1] = bytes[2 * pair];
+                        }
+                        u64::from_le_bytes(out)
+                    }
+                    32 => {
+                        let low = (value as u32).swap_bytes();
+                        let high = ((value >> 32) as u32).swap_bytes();
+                        u64::from(low) | (u64::from(high) << 32)
+                    }
+                    _ => value.swap_bytes(),
+                };
+                self.write(rd, width, reversed);
+            }
             Extr { width, rd, rn, rm, lsb } => {
                 let (high, low) = (self.read(rn, width), self.read(rm, width));
                 let value = if lsb == 0 {
@@ -978,7 +999,7 @@ impl Cpu {
             AddsExtendedRegister { width, rd, rn, rm, option, amount } => {
                 let operand2 = self.extended(rm, option, amount, width);
                 let (value, flags) =
-                    add_with_carry(self.read_sp(rn, width), operand2, false, width);
+                    add_with_carry(self.read_sp(rn, width), operand2 & width.mask(), false, width);
                 self.write(rd, width, value);
                 self.flags = flags;
             }
@@ -1153,6 +1174,14 @@ impl Cpu {
                     self.write_sp(rn, Width::W64, base);
                 }
                 self.write(rt, width, value as u8 as i8 as i64 as u64);
+            }
+            LdrswImmediate { rt, rn, index, offset } => {
+                let (address, writeback) = self.address(rn, index, offset)?;
+                let value = self.load(bus, address, 4)?;
+                if let Some(base) = writeback {
+                    self.write_sp(rn, Width::W64, base);
+                }
+                self.write(rt, Width::W64, value as u32 as i32 as i64 as u64);
             }
             LdrbRegister { rt, rn, rm, extend } => {
                 let address = self.base(rn)?.wrapping_add(self.extend_register(rm, extend));
@@ -1664,6 +1693,52 @@ mod tests {
             (cpu.x[0], cpu.x[9]) = (x as u64, y as u64);
             tick(&mut cpu, &mut bus).unwrap();
             assert_eq!(cpu.x[9] as i64, expected, "{x} * {y}");
+        }
+    }
+
+    #[test]
+    fn adds_extended_sets_the_carry() {
+        // adds w12, w12, w14, uxtb (ADR 0043): only w14's low byte is added.
+        for (x, y, sum, carry) in [(5u64, 0x1FFu64, 0x104u64, false), (0xFFFF_FFFF, 1, 0, true)] {
+            let mut bus = Bus::new(uart());
+            bus.load(0x80000, &0x2b2e018cu32.to_le_bytes()).unwrap();
+            let mut cpu = Cpu::new(0x80000, false);
+            (cpu.x[12], cpu.x[14]) = (x, y);
+            tick(&mut cpu, &mut bus).unwrap();
+            assert_eq!((cpu.x[12], cpu.flags.c), (sum, carry), "{x} + {y}");
+        }
+    }
+
+    #[test]
+    fn rev_reverses_bytes_in_each_piece() {
+        // rev w9, w9; rev x1, x2; rev16 w3, w4; rev32 x5, x6 (ADR 0043).
+        let value = 0x0102_0304_0506_0708u64;
+        for (word, from, to, expected) in [
+            (0x5ac00929u32, 9, 9, 0x0807_0605u64),
+            (0xdac00c41, 2, 1, 0x0807_0605_0403_0201),
+            (0x5ac00483, 4, 3, 0x0605_0807),
+            (0xdac008c5, 6, 5, 0x0403_0201_0807_0605),
+        ] {
+            let mut bus = Bus::new(uart());
+            bus.load(0x80000, &word.to_le_bytes()).unwrap();
+            let mut cpu = Cpu::new(0x80000, false);
+            cpu.x[from] = value;
+            tick(&mut cpu, &mut bus).unwrap();
+            assert_eq!(cpu.x[to], expected, "{word:#x}");
+        }
+    }
+
+    #[test]
+    fn ldrsw_immediate_sign_extends() {
+        // ldrsw x8, [sp, #0x10c8] (ADR 0043).
+        for (word, expected) in [(0xFFFF_FFFEu32, 0xFFFF_FFFF_FFFF_FFFE), (19_800, 19_800)] {
+            let mut bus = Bus::new(uart());
+            bus.load(0x80000, &0xb990cbe8u32.to_le_bytes()).unwrap();
+            bus.load(0x90000 + 0x10c8, &word.to_le_bytes()).unwrap();
+            let mut cpu = Cpu::new(0x80000, false);
+            cpu.sp_el = [0x90000; 3];
+            tick(&mut cpu, &mut bus).unwrap();
+            assert_eq!(cpu.x[8], expected);
         }
     }
 
