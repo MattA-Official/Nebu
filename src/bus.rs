@@ -222,6 +222,12 @@ impl Bus {
         self.power.deadline()
     }
 
+    /// Whether the machine halts, rather than starting again, when the watchdog
+    /// resets it: the power manager's `RSTS` names partition 63 (ADR 0045).
+    pub fn halts_on_reset(&self) -> bool {
+        self.power.halts()
+    }
+
     /// Copies `bytes` into RAM at `address`, as the firmware does with the kernel image.
     pub fn load(&mut self, address: u64, bytes: &[u8]) -> Result<(), BusError> {
         if address.checked_add(bytes.len() as u64).is_none_or(|end| end > RAM_END) {

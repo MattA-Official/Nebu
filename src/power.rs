@@ -4,7 +4,8 @@
 //! count runs out, the whole machine resets. Rewriting `WDOG` while it is armed starts
 //! the count again, writing "full reset" to `RSTC` again does not, and clearing
 //! `RSTC`'s configuration disarms it. Every write carries the password 0x5A in its top
-//! byte. Reading `WDOG`, which on the chip gives the ticks left, is not modelled, as
+//! byte. Writing partition 63 into `RSTS` before the reset halts the machine, as the
+//! firmware stays halted (Nebu ADR 0045). Reading `WDOG`, which on the chip gives the ticks left, is not modelled, as
 //! NeOS does not do it, so it halts Nebu.
 //!
 //! Register offsets and values are the ones Linux's `bcm2835_wdt` driver uses.
@@ -28,6 +29,10 @@ const TIME_MASK: u32 = 0xF_FFFF;
 /// watchdog reset.
 const RSTS_POWER_ON: u32 = 0x1000;
 const RSTS_WATCHDOG: u32 = 0x20;
+/// RSTS's partition bits, the even bits 0 to 10, and partition 63 in them, which
+/// tells the firmware to stay halted after the reset, as Linux's `bcm2835_wdt` uses
+/// it to power off.
+const PARTITION_BITS: u32 = 0x555;
 
 /// The core's counts in one tick of the watchdog: the counter runs at 62.5 MHz (ADR
 /// 0016) and the watchdog at 65,536 Hz.
@@ -72,7 +77,7 @@ impl Power {
 
     /// Writes the 32-bit register at `offset`, with the counter at `now`.
     pub fn write(&mut self, offset: u64, value: u32, now: u64) -> Result<(), Refusal> {
-        if !matches!(offset, RSTC | WDOG) {
+        if !matches!(offset, RSTC | RSTS | WDOG) {
             return Err(Refusal::Register);
         }
         if value & PASSWORD_MASK != PASSWORD {
@@ -87,6 +92,7 @@ impl Power {
                 }
                 self.rstc = value;
             }
+            RSTS => self.rsts = value,
             _ => self.wdog = value & TIME_MASK,
         }
         // The count starts when the watchdog is armed, or when it is rewritten; arming
@@ -107,6 +113,12 @@ impl Power {
     /// The counter at which the watchdog resets the machine, if it is armed.
     pub fn deadline(&self) -> Option<u64> {
         self.deadline
+    }
+
+    /// Whether the firmware would stay halted after a reset now: `RSTS` names
+    /// partition 63.
+    pub fn halts(&self) -> bool {
+        self.rsts & PARTITION_BITS == PARTITION_BITS
     }
 }
 
@@ -152,10 +164,25 @@ mod tests {
         let mut power = Power::new(false);
         assert_eq!(power.write(WDOG, 10, 0), Err(Refusal::Password));
         assert_eq!(power.write(RSTC, WRCFG_FULL_RESET, 0), Err(Refusal::Password));
-        assert_eq!(power.write(RSTS, PASSWORD, 0), Err(Refusal::Register));
         assert_eq!(power.write(0x10, PASSWORD, 0), Err(Refusal::Register));
         assert_eq!(power.write(RSTC, PASSWORD | 0x10, 0), Err(Refusal::Configuration));
         assert_eq!(power.read(0x10), None);
+    }
+
+    #[test]
+    fn partition_63_in_the_status_halts_and_others_do_not() {
+        let mut power = Power::new(true);
+        assert!(!power.halts());
+        assert_eq!(power.write(RSTS, 0x555, 0), Err(Refusal::Password));
+        power.write(RSTS, PASSWORD | RSTS_POWER_ON | 0x554, 0).unwrap();
+        assert!(!power.halts());
+        // Linux's way: what it holds, with the partition bits all set.
+        let status = power.read(RSTS).unwrap();
+        power.write(RSTS, PASSWORD | status | PARTITION_BITS, 0).unwrap();
+        assert!(power.halts());
+        assert_eq!(power.read(RSTS), Some(RSTS_POWER_ON | 0x555));
+        // Writing it is not arming: nothing happens until the watchdog runs out.
+        assert_eq!(power.deadline(), None);
     }
 
     #[test]
