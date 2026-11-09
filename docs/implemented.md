@@ -16,6 +16,7 @@ all addressing modes.
 | ADD (extended register)      | NeOS stage 5a: threads       |
 | ADD (shifted register)       | NeOS step 2: panic path      |
 | ADDS (immediate)             | NeOS step 3: chainloader     |
+| ADDS (extended register)     | NeOS: the process model and reading TZ rules ([ADR 0041](decisions/0041-adds-extended-register.md), [ADR 0043](decisions/0043-rev-adds-and-ldrsw.md)) |
 | ADDS (shifted register)      | NeOS stage 3: loading the root task |
 | ADR                          | NeOS step 2: boot            |
 | ADRP                         | NeOS stage 2: MMU            |
@@ -62,7 +63,8 @@ all addressing modes.
 | LDRH (register)              | NeOS's unsafe code audit: the kernel window as a constant |
 | LDRSB (immediate)            | NeOS's shell: comparing strings ([ADR 0020](decisions/0020-ldrsb-immediate.md)) |
 | LDRSB (register)             | NeOS stage 7: checking UTF-8 ([ADR 0018](decisions/0018-the-uarts-interrupts.md)) |
-| LDRSH (immediate)            | NeOS's accounts service ([ADR 0044](decisions/0044-ldrsh-and-rev.md)) |
+| LDRSH (immediate)            | NeOS's accounts service ([ADR 0044](decisions/0044-ldrsh-immediate.md)) |
+| LDRSW (immediate)            | NeOS: local time offsets ([ADR 0043](decisions/0043-rev-adds-and-ldrsw.md)) |
 | LDRSW (register)             | NeOS stage 5b: the ipc test's jump tables |
 | LDUR                         | NeOS stage 4: reading the boot info |
 | LDURB                        | NeOS stage 3: loading the root task |
@@ -81,8 +83,8 @@ all addressing modes.
 | ORR (immediate)              | NeOS stage 1: dropping to EL1 |
 | ORR (shifted register)       | NeOS step 2: panic path      |
 | RBIT                         | NeOS stage 4: splitting memory into untyped blocks |
-| REV, REV16, REV32            | NeOS's accounts service ([ADR 0044](decisions/0044-ldrsh-and-rev.md)) |
 | RET                          | NeOS step 2: panic path      |
+| REV, REV16, REV32            | NeOS: reading TZif files ([ADR 0043](decisions/0043-rev-adds-and-ldrsw.md)) |
 | SBC                          | NeOS stage 4: checking a split of untyped memory |
 | SBCS                         | NeOS stage 4: capabilities   |
 | SBFM                         | NeOS step 3: CRC-32          |
@@ -133,7 +135,7 @@ LDURB and STURB run as LDRB and STRB with an unscaled offset
 ([ADR 0012](decisions/0012-instructions-for-capabilities.md)), and LDURH and STURH
 as LDRH and STRH ([ADR 0014](decisions/0014-threads-and-address-spaces.md)), and
 LDURSB as LDRSB ([ADR 0020](decisions/0020-ldrsb-immediate.md)), and LDURSH as
-LDRSH ([ADR 0044](decisions/0044-ldrsh-and-rev.md)).
+LDRSH ([ADR 0044](decisions/0044-ldrsh-immediate.md)).
 
 ## System registers
 
