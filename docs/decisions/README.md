@@ -51,4 +51,5 @@ works live here.
 | 0041 | [ADDS (extended register)](0041-adds-extended-register.md) | Accepted |
 | 0042 | [DMB, ADC and SMULH](0042-dmb-adc-and-smulh.md) | Proposed |
 | 0043 | [REV, ADDS (extended register) and LDRSW (immediate)](0043-rev-adds-and-ldrsw.md) | Accepted |
+| 0044 | [LDRSH (immediate)](0044-ldrsh-immediate.md) | Accepted |
 | 0050 | [The mailboxes between cores](0050-the-mailboxes-between-cores.md) | Accepted |

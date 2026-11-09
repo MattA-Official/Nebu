@@ -472,6 +472,8 @@ pub enum Instruction {
     /// LDRSB (immediate): load a byte into `rt`, sign-extended to `width`.
     /// `rn` 31 is SP, `rt` 31 the zero register.
     LdrsbImmediate { width: Width, rt: u8, rn: u8, index: Index, offset: i64 },
+    /// LDRSH (immediate): load a halfword into `rt`, sign-extended to `width`.
+    LdrshImmediate { width: Width, rt: u8, rn: u8, index: Index, offset: i64 },
     /// LDRSW (immediate): load a word into `rt`, sign-extended to 64 bits. `rn` 31 is
     /// SP, `rt` 31 the zero register (ADR 0043).
     LdrswImmediate { rt: u8, rn: u8, index: Index, offset: i64 },
@@ -972,6 +974,17 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
                             offset,
                         })
                     }
+                    // LDURSH, as LDRSH with an offset.
+                    (0b01, 0b10 | 0b11) => {
+                        let width = Width::from_bit(!opc & 1);
+                        Ok(Instruction::LdrshImmediate {
+                            width,
+                            rt,
+                            rn,
+                            index: Index::Offset,
+                            offset,
+                        })
+                    }
                     // LDURSW, as LDRSW with an offset.
                     (0b10, 0b10) => {
                         Ok(Instruction::LdrswImmediate { rt, rn, index: Index::Offset, offset })
@@ -1045,6 +1058,10 @@ fn loads_and_stores(word: u32) -> Result<Instruction, DecodeError> {
             }
             (0b01, 0b00) => Ok(Instruction::StrhImmediate { rt, rn, index, offset }),
             (0b01, 0b01) => Ok(Instruction::LdrhImmediate { rt, rn, index, offset }),
+            (0b01, 0b10 | 0b11) => {
+                let width = Width::from_bit(!opc & 1);
+                Ok(Instruction::LdrshImmediate { width, rt, rn, index, offset })
+            }
             (0b10, 0b10) => Ok(Instruction::LdrswImmediate { rt, rn, index, offset }),
             (0b10 | 0b11, 0b00) => {
                 let width = Width::from_bit(size & 1);
@@ -1724,6 +1741,9 @@ impl fmt::Display for Instruction {
             }
             LdrsbImmediate { width, rt, rn, index, offset } => {
                 write!(f, "ldrsb {}, {}", zr(rt, width), Address { rn, index, offset })
+            }
+            LdrshImmediate { width, rt, rn, index, offset } => {
+                write!(f, "ldrsh {}, {}", zr(rt, width), Address { rn, index, offset })
             }
             LdrswImmediate { rt, rn, index, offset } => {
                 write!(f, "ldrsw {}, {}", zr(rt, Width::W64), Address { rn, index, offset })
